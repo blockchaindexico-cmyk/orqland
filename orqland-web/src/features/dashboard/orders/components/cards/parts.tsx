@@ -11,14 +11,67 @@ export function SplitCard({ left, right, className, urgent, label }: { left: Rea
     <article
       aria-label={label}
       className={cn(
-        'grid w-full overflow-hidden rounded-2xl border-2 bg-white shadow-sm md:grid-cols-[1.05fr_1fr]',
-        urgent === 'overdue' ? 'border-red-500' : urgent === 'low' ? 'order-urgent border-red-500' : 'border-transparent',
+        '@container w-full overflow-hidden rounded-2xl border-2 bg-white shadow-sm',
+        urgent === 'overdue' ? 'border-red-500 bg-red-50/40' : urgent === 'low' ? 'order-urgent border-red-500' : 'border-transparent',
         className,
       )}
     >
-      <div className="flex min-w-0 flex-col gap-4 p-5">{left}</div>
-      <div className="flex min-w-0 flex-col gap-3 border-t border-gray-200 p-5 md:border-l md:border-t-0">{right}</div>
+      <div className="grid h-full @min-[540px]:grid-cols-[1.05fr_1fr]">
+        <div className="flex min-w-0 flex-col gap-4 p-5">{left}</div>
+        <div className="flex min-w-0 flex-col gap-3 border-t border-gray-200 p-5 @min-[540px]:border-l @min-[540px]:border-t-0">{right}</div>
+      </div>
     </article>
+  );
+}
+
+/** Standard card body: heading, product, quantity/cost and destination on the left; order id, customer and the status-specific part on the right. */
+export function OrderCardFrame({
+  order,
+  onOpen,
+  heading,
+  leftExtra,
+  urgent,
+  children,
+  actions,
+}: {
+  order: Order;
+  onOpen: (orderId: string) => void;
+  heading: React.ReactNode;
+  leftExtra?: React.ReactNode;
+  urgent?: 'low' | 'overdue' | null;
+  children?: React.ReactNode;
+  actions?: React.ReactNode;
+}) {
+  return (
+    <SplitCard
+      label={`Order ${order.orderNumber}`}
+      urgent={urgent}
+      left={
+        <>
+          {heading}
+          <ProductBlock order={order} />
+          <Facts>
+            <Fact label="Quantity">{order.items.reduce((n, i) => n + i.quantity, 0)}</Fact>
+            <Fact label="Cost">{formatMoney(order.totalAmount)}</Fact>
+          </Facts>
+          {leftExtra}
+          <DestinationBlock order={order} />
+        </>
+      }
+      right={
+        <>
+          <div className="flex items-center justify-between gap-2">
+            <OrderIdLine order={order} />
+            <button type="button" onClick={() => onOpen(order.id)} className="shrink-0 text-[12px] font-semibold text-gray-950 underline-offset-2 hover:underline">
+              View order →
+            </button>
+          </div>
+          <CustomerBox order={order} />
+          {children}
+          {actions && <div className="mt-auto flex flex-wrap justify-end gap-2 pt-1 [&>*]:flex-1 sm:[&>*]:flex-none">{actions}</div>}
+        </>
+      }
+    />
   );
 }
 
@@ -72,7 +125,9 @@ export function DestinationBlock({ order, label }: { order: Order; label?: strin
   );
 }
 
-export function CustomerBox({ order, showPayment = true }: { order: Order; showPayment?: boolean }) {
+const PAYMENT_DOT: Record<string, string> = { PAID: 'bg-green-600', PENDING: 'bg-blue-600', FAILED: 'bg-red-600', REFUND_PENDING: 'bg-amber-500', PARTIALLY_REFUNDED: 'bg-amber-500', REFUNDED: 'bg-gray-400' };
+
+export function CustomerBox({ order, showPayment = true, label = 'Customer details' }: { order: Order; showPayment?: boolean; label?: string | null }) {
   const initials = order.buyerSnapshot.name
     .split(' ')
     .map((w) => w[0])
@@ -81,7 +136,7 @@ export function CustomerBox({ order, showPayment = true }: { order: Order; showP
     .toUpperCase();
   return (
     <div>
-      <p className="mb-1.5 text-[11px] font-medium uppercase tracking-wide text-gray-500">Customer details</p>
+      {label && <p className="mb-1.5 text-[11px] font-medium uppercase tracking-wide text-gray-500">{label}</p>}
       <div className="flex items-center gap-3 rounded-xl bg-gray-100 p-2.5 shadow-[inset_0_0_0_1px_rgba(0,0,0,0.04)]">
         <span aria-hidden className="flex size-11 shrink-0 items-center justify-center rounded-md bg-gray-950 text-[13px] font-semibold text-white">
           {initials}
@@ -95,13 +150,13 @@ export function CustomerBox({ order, showPayment = true }: { order: Order; showP
           ) : (
             <span className="block text-[12px] text-gray-400">No phone</span>
           )}
+          {showPayment && (
+            <span className="mt-0.5 flex items-center gap-1 text-[11px] font-semibold text-gray-800">
+              <span aria-hidden className={cn('size-1.5 rounded-full', PAYMENT_DOT[order.paymentStatus] ?? 'bg-gray-400')} />
+              {paymentLabel(order)}
+            </span>
+          )}
         </span>
-        {showPayment && (
-          <span className="flex shrink-0 items-center gap-1 text-[11px] font-semibold text-gray-800">
-            <span aria-hidden className={cn('size-1.5 rounded-full', order.paymentStatus === 'PAID' ? 'bg-green-600' : 'bg-blue-600')} />
-            {paymentLabel(order)}
-          </span>
-        )}
       </div>
     </div>
   );
@@ -127,8 +182,6 @@ export function Fact({ label, children, className }: { label: string; children: 
     </div>
   );
 }
-
-export const costFact = (o: Order) => formatMoney(o.totalAmount);
 
 /** Pie (filled = time left) used for the return window on completed orders. */
 export function PieTimer({ fraction, label, ariaLabel }: { fraction: number; label: string; ariaLabel: string }) {
@@ -171,4 +224,18 @@ export function InlineError({ message }: { message: string | null | undefined })
       {message}
     </p>
   );
+}
+
+export function CustomerNote({ order }: { order: Order }) {
+  if (!order.customerNote) return null;
+  return (
+    <p className="rounded-lg bg-amber-50 px-3 py-2 text-[12.5px] text-amber-900">
+      <span className="font-semibold">Customer note: </span>
+      {order.customerNote}
+    </p>
+  );
+}
+
+export function SectionLabel({ children }: { children: React.ReactNode }) {
+  return <p className="mb-1.5 text-[11px] font-medium uppercase tracking-wide text-gray-500">{children}</p>;
 }

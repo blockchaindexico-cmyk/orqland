@@ -175,7 +175,7 @@ describe('Order cards: preparation timer, tabs, cancel requests, returns, refund
     ).orqspaceOrderSummary;
     expect(Number(summary.totalSales)).toBeGreaterThan(0);
     expect(summary.ongoingOrders).toBeGreaterThanOrEqual(1);
-    expect(summary.tabs.map((t: { queue: string }) => t.queue)).toEqual(['ALL', 'NEW', 'UPCOMING', 'PROCESSING', 'ONGOING', 'COMPLETED', 'CANCELLED', 'SUPPORT']);
+    expect(summary.tabs.map((t: { queue: string }) => t.queue)).toEqual(['ALL', 'NEW', 'UPCOMING', 'PROCESSING', 'ONGOING', 'COMPLETED', 'CANCELLED', 'CANCEL_REQUESTS', 'SUPPORT']);
     expect(summary.tabs.find((t: { queue: string }) => t.queue === 'PROCESSING').count).toBeGreaterThanOrEqual(1);
     expect((await gql(SEED.owner, CARD, { id: order.id })).orqspaceOrder.items[0].stockRemaining).toBeGreaterThan(0);
   });
@@ -187,11 +187,13 @@ describe('Order cards: preparation timer, tabs, cancel requests, returns, refund
     const requested = (await mutate(SEED.customer, 'cancelMyOrder', 'OrderReasonInput', { orderId: order.id, reason: 'Ordered by mistake' }, 'orderStatus cancelRequestStatus')).cancelMyOrder;
     expect(requested).toEqual({ orderStatus: 'ACCEPTED', cancelRequestStatus: 'REQUESTED' });
     expect(await queueIds('CANCELLED')).toContain(order.id);
+    expect(await queueIds('CANCEL_REQUESTS')).toContain(order.id);
     expect(await queueIds('UPCOMING')).not.toContain(order.id);
 
     await mutate(SEED.owner, 'declineOrderCancellation', 'OrderReasonInput', { orderId: order.id, reason: 'Already packed and on schedule' });
     expect((await gql(SEED.owner, CARD, { id: order.id })).orqspaceOrder.cancelRequestStatus).toBe('DECLINED');
     expect(await queueIds('UPCOMING')).toContain(order.id);
+    expect(await queueIds('CANCEL_REQUESTS')).not.toContain(order.id);
 
     await mutate(SEED.customer, 'cancelMyOrder', 'OrderReasonInput', { orderId: order.id, reason: 'Really need to cancel' });
     const approved = (await mutate(SEED.owner, 'approveOrderCancellation', 'OrderActionInput', { orderId: order.id }, 'orderStatus cancelRequestStatus cancellationReason')).approveOrderCancellation;
@@ -216,8 +218,10 @@ describe('Order cards: preparation timer, tabs, cancel requests, returns, refund
     expect((await mutate(SEED.owner, 'scheduleOrderReturnPickup', 'ScheduleReturnPickupInput', { orderId: order.id, pickupDate }, 'returnPickupDate')).scheduleOrderReturnPickup.returnPickupDate).toBe(pickupDate);
     await mutate(SEED.owner, 'markOrderReturned', 'MarkOrderReturnedInput', { orderId: order.id, reason: 'Picked up from the customer', restock: true });
     expect(await queueIds('SUPPORT')).toContain(order.id); // refund still due
+    expect((await gql(SEED.owner, `query($id: ID!) { orqspaceOrder(orderId: $id) { amountPaid } }`, { id: order.id })).orqspaceOrder.amountPaid).toBe('504.00');
     const refunded = (await mutate(SEED.owner, 'approveOrderRefund', 'ApproveRefundInput', { orderId: order.id, providerReference: 'UPI-RF-CARD-3' }, 'orderStatus paymentStatus')).approveOrderRefund;
     expect(refunded).toEqual({ orderStatus: 'RETURNED', paymentStatus: 'REFUNDED' });
+    expect((await gql(SEED.owner, `query($id: ID!) { orqspaceOrder(orderId: $id) { amountPaid } }`, { id: order.id })).orqspaceOrder.amountPaid).toBe('0.00');
     expect(await queueIds('SUPPORT')).not.toContain(order.id);
     expect(await gqlError(SEED.owner, `mutation($i: ApproveRefundInput!) { approveOrderRefund(input: $i) { orderStatus } }`, { i: { orderId: order.id } })).toMatch(/no refund due/);
   });

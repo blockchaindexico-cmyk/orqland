@@ -230,6 +230,20 @@ export class OrdersQueryService {
           .where(inArray(orqListingVariants.id, variantIds))
       : [];
     const remaining = new Map(stock.filter((v) => v.mode === 'LIMITED').map((v) => [v.id, v.remaining]));
+    const paidRows = await this.db
+      .select({
+        orderId: orderPayments.orderId,
+        net: sql<string>`coalesce(sum(CASE WHEN ${orderPayments.kind} = 'PAYMENT' THEN ${orderPayments.amount} ELSE -${orderPayments.amount} END) FILTER (WHERE ${orderPayments.status} = 'SUCCEEDED'), 0)`,
+      })
+      .from(orderPayments)
+      .where(
+        inArray(
+          orderPayments.orderId,
+          rows.map((r) => r.id),
+        ),
+      )
+      .groupBy(orderPayments.orderId);
+    const paid = new Map(paidRows.map((p) => [p.orderId, fromPaise(Math.max(0, toPaise(p.net)))]));
     const byOrder = new Map<string, OrderItemType[]>();
     for (const item of items) {
       const withStock = { ...item, stockRemaining: item.variantId ? (remaining.get(item.variantId) ?? null) : null };
@@ -244,6 +258,7 @@ export class OrdersQueryService {
         items: orderItemsForRow,
         itemCount: orderItemsForRow.reduce((sum, i) => sum + i.quantity, 0),
         allowedNextStatuses: allowedNextStatuses(row.orderStatus, viewerRole),
+        amountPaid: paid.get(row.id) ?? '0.00',
         returnWindowEndsAt:
           completedAt && ordersConfig.returnWindowHours > 0 && ['DELIVERED', 'PICKED_UP'].includes(row.orderStatus)
             ? new Date(completedAt.getTime() + ordersConfig.returnWindowHours * 3_600_000)
@@ -257,5 +272,6 @@ export class OrdersQueryService {
 function queueOrder(queue: OrderQueue | undefined) {
   if (queue === 'PROCESSING') return [asc(orders.preparationDueAt), asc(orders.createdAt)];
   if (queue === 'UPCOMING' || queue === 'NEW') return [asc(sql`coalesce(${orders.scheduledFor}, ${orders.createdAt})`)];
+  if (queue === 'CANCEL_REQUESTS') return [asc(orders.cancelRequestedAt)];
   return [desc(orders.createdAt)];
 }

@@ -2,7 +2,7 @@ import { and, inArray, or, sql, type SQL } from 'drizzle-orm';
 import { orders, type OrderStatus } from '@/infrastructure/database/schema';
 
 /** Tabs on the Orders / Bookings page. Each order appears where it needs attention next. */
-export const ORDER_QUEUES = ['ALL', 'NEW', 'UPCOMING', 'PROCESSING', 'ONGOING', 'COMPLETED', 'CANCELLED', 'SUPPORT'] as const;
+export const ORDER_QUEUES = ['ALL', 'NEW', 'UPCOMING', 'PROCESSING', 'ONGOING', 'COMPLETED', 'CANCELLED', 'CANCEL_REQUESTS', 'SUPPORT'] as const;
 export type OrderQueue = (typeof ORDER_QUEUES)[number];
 
 export const CANCEL_REQUESTABLE_STATUSES: OrderStatus[] = ['ACCEPTED', 'PREPARING', 'READY_FOR_FULFILMENT', 'AWAITING_CUSTOMER_PICKUP'];
@@ -17,6 +17,7 @@ const noCancelPending = () => sql`${orders.cancelRequestStatus} IS DISTINCT FROM
  * ONGOING    ready, out for delivery, or waiting for customer pickup
  * COMPLETED  delivered / collected
  * CANCELLED  cancelled, rejected, or the customer asked to cancel
+ * CANCEL_REQUESTS  only the open customer cancel requests (subset of CANCELLED)
  * SUPPORT    returns, failed deliveries and refunds due
  */
 export function queueCondition(queue: OrderQueue): SQL | undefined {
@@ -35,6 +36,8 @@ export function queueCondition(queue: OrderQueue): SQL | undefined {
       return inArray(orders.orderStatus, ['DELIVERED', 'PICKED_UP']);
     case 'CANCELLED':
       return or(inArray(orders.orderStatus, ['CANCELLED', 'REJECTED']), cancelPending());
+    case 'CANCEL_REQUESTS':
+      return cancelPending();
     case 'SUPPORT':
       return or(
         inArray(orders.orderStatus, ['RETURN_REQUESTED', 'DELIVERY_FAILED']),

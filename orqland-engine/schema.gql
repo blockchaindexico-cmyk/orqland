@@ -881,6 +881,7 @@ type OperationsTrendPoint {
 type Order {
   acceptedAt: DateTime
   allowedNextStatuses: [OrderStatus!]!
+  amountPaid: String
   buyerSnapshot: BuyerSnapshot!
   cancelRequestReason: String
   cancelRequestResolution: String
@@ -1017,6 +1018,7 @@ enum OrderPaymentStatus {
 enum OrderQueue {
   ALL
   CANCELLED
+  CANCEL_REQUESTS
   COMPLETED
   NEW
   ONGOING

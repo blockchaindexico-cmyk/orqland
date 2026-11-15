@@ -18,7 +18,7 @@ export type PaymentStatus = 'PENDING' | 'PAID' | 'FAILED' | 'REFUND_PENDING' | '
 export type FulfilmentMethod = 'SELF_DELIVERY' | 'AGENT_DELIVERY' | 'PICKUP';
 
 /** Tabs on the Orders / Bookings page (server-side filters). */
-export type OrderQueue = 'ALL' | 'NEW' | 'UPCOMING' | 'PROCESSING' | 'ONGOING' | 'COMPLETED' | 'CANCELLED' | 'SUPPORT';
+export type OrderQueue = 'ALL' | 'NEW' | 'UPCOMING' | 'PROCESSING' | 'ONGOING' | 'COMPLETED' | 'CANCELLED' | 'CANCEL_REQUESTS' | 'SUPPORT';
 
 export interface AddressSnapshot {
   recipientName: string | null;
@@ -149,6 +149,8 @@ export interface Order {
   cancelRequestResolution: string | null;
   returnPickupDate: string | null;
   returnWindowEndsAt: string | null;
+  /** Successful payments minus refunds. */
+  amountPaid: string;
   distanceFromPickupKm: number | null;
   buyerSnapshot: { name: string; phone: string | null; email: string | null; orqUserId: string };
   deliveryAddressSnapshot: AddressSnapshot | null;

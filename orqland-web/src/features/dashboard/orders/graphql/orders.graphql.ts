@@ -17,7 +17,7 @@ export const ORDER_FIELDS = `
   createdAt acceptedAt preparingAt readyAt dispatchedAt deliveredAt completedAt cancelledAt
   scheduledFor preparationMinutes preparationDueAt
   cancelRequestStatus cancelRequestedAt cancelRequestReason cancelRequestResolution
-  returnPickupDate returnWindowEndsAt distanceFromPickupKm
+  returnPickupDate returnWindowEndsAt distanceFromPickupKm amountPaid
   buyerSnapshot { name phone email orqUserId }
   deliveryAddressSnapshot { ${ADDRESS} }
   items { id title variantLabel sku imageUrl quantity unitBasePrice gstPercentage unitTotalPrice lineTotal stockRemaining }

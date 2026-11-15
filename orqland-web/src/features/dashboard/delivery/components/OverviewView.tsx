@@ -165,8 +165,8 @@ function BreachRow({ stage, reference, over, target }: { stage: string; referenc
 /** The order queue as a left-to-right pipeline; each stage links to the filtered order list. */
 function OrderQueue({ o, onGo }: { o: DeliveryOperations; onGo: (tab: DeliveryTab) => void }) {
   const stages: { label: string; value: number; href?: string; onClick?: () => void; emphasise?: boolean }[] = [
-    { label: 'New', value: o.queue.newOrders, href: '/orders?status=PLACED', emphasise: o.queue.newOrders > 0 },
-    { label: 'Preparing', value: o.queue.preparing, href: '/orders?status=PREPARING' },
+    { label: 'New', value: o.queue.newOrders, href: '/orders?tab=UPCOMING', emphasise: o.queue.newOrders > 0 },
+    { label: 'Preparing', value: o.queue.preparing, href: '/orders?tab=PROCESSING' },
     { label: 'Ready to dispatch', value: o.queue.readyForFulfilment, onClick: () => onGo('assign'), emphasise: o.queue.readyForFulfilment > 0 },
     { label: 'Unassigned', value: o.deliveries.unassigned + o.deliveries.offered, onClick: () => onGo('assign') },
     { label: 'To pickup', value: o.deliveries.toPickup, onClick: () => onGo('live') },

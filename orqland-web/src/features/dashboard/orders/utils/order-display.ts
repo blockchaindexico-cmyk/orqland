@@ -49,3 +49,35 @@ export const reasonFor = (o: Order, status: string) => [...o.history].reverse().
 
 export const refundDue = (o: Order) => o.paymentStatus === 'REFUND_PENDING' || o.paymentStatus === 'PARTIALLY_REFUNDED';
 export const cancelPending = (o: Order) => o.cancelRequestStatus === 'REQUESTED' && ['ACCEPTED', 'PREPARING', 'READY_FOR_FULFILMENT', 'AWAITING_CUSTOMER_PICKUP'].includes(o.orderStatus);
+
+/** Delivery statuses that mean a partner is (or is being) assigned and the trip is not over. */
+export const ACTIVE_DELIVERY_STATUSES = ['PENDING_ASSIGNMENT', 'OFFERED', 'ACCEPTED', 'ARRIVING_AT_PICKUP', 'PICKED_UP', 'IN_TRANSIT'];
+export const hasActiveDelivery = (o: Order) => !!o.delivery && ACTIVE_DELIVERY_STATUSES.includes(o.delivery.status);
+export const isPickupOrder = (o: Order) => o.requestedFulfilment === 'PICKUP' || !o.deliveryAddressSnapshot;
+
+/** Mirrors ORDER_DEFAULT_PREPARATION_MINUTES / ORDER_PREPARATION_EXTENSION_MINUTES on the engine. */
+export const DEFAULT_PREP_MINUTES = 15;
+export const PREP_EXTENSION_MINUTES = 2;
+export const PREP_OPTIONS = [5, 10, 15, 20, 25, 30, 45, 60, 90, 120];
+
+/** 'low' blinks the card border; 'overdue' keeps it solid red. */
+export function prepUrgency(o: Order, now: number): 'low' | 'overdue' | null {
+  if (o.orderStatus !== 'PREPARING' || !o.preparationDueAt) return null;
+  const left = (new Date(o.preparationDueAt).getTime() - now) / 60_000;
+  if (left < 0) return 'overdue';
+  const total = o.preparationMinutes ?? DEFAULT_PREP_MINUTES;
+  return left <= Math.min(5, Math.max(2, total * 0.25)) ? 'low' : null;
+}
+
+export const formatClock = (value: string | number | Date | null | undefined) =>
+  value === null || value === undefined ? '—' : new Date(value).toLocaleTimeString('en-IN', { hour: 'numeric', minute: '2-digit' });
+
+export function navigateUrl(o: Order): string | null {
+  const lat = o.delivery?.dropoffLat ?? o.deliveryAddressSnapshot?.latitude;
+  const lng = o.delivery?.dropoffLng ?? o.deliveryAddressSnapshot?.longitude;
+  if (lat !== null && lat !== undefined && lng !== null && lng !== undefined) return `https://www.google.com/maps/dir/?api=1&destination=${lat},${lng}`;
+  const a = o.deliveryAddressSnapshot;
+  if (!a) return null;
+  const q = [a.doorNo, a.street, a.landmark, a.city, a.pincode].filter(Boolean).join(', ');
+  return q ? `https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(q)}` : null;
+}

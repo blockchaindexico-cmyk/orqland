@@ -133,6 +133,8 @@ export class OrderType {
   @Field(() => String, { nullable: true }) returnPickupDate: string | null;
   /** Returns can be requested until this time (null = no limit / not delivered yet). */
   @Field(() => Date, { nullable: true }) returnWindowEndsAt?: Date | null;
+  /** Successful payments minus refunds — what a refund would return. */
+  @Field({ nullable: true }) amountPaid?: string;
   @Field(() => Int) version: number;
   @Field() createdAt: Date;
   @Field() updatedAt: Date;

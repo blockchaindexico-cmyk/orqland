@@ -47,7 +47,7 @@ export function AssignDeliveryPartner({ order, orqspaceId }: { order: Order; orq
             onChange={(e) => setChoice(e.target.value)}
             className="h-10 min-w-0 flex-1 rounded-lg border border-gray-300 bg-white px-2.5 text-[13px] focus-visible:outline-2 focus-visible:outline-gray-900"
           >
-            <option value={AUTO}>Auto-assign nearest available</option>
+            <option value={AUTO}>Auto-assign (nearest)</option>
             {sorted.map((c) => {
               const blocker = agentBlocker(c);
               const km = distanceFromPickup(c, settings.data);
@@ -75,8 +75,8 @@ export function AssignDeliveryPartner({ order, orqspaceId }: { order: Order; orq
 const STEP: Record<string, string> = {
   PENDING_ASSIGNMENT: 'Looking for an agent',
   OFFERED: 'Offer sent',
-  ACCEPTED: 'Heading to the workspace',
-  ARRIVING_AT_PICKUP: 'At the workspace',
+  ACCEPTED: 'Accepted the delivery',
+  ARRIVING_AT_PICKUP: 'Heading to the workspace',
   PICKED_UP: 'Picked up',
   IN_TRANSIT: 'On the way to the customer',
   DELIVERED: 'Delivered',
@@ -103,7 +103,7 @@ export function PartnerDetails({ order, onTrack, compact }: { order: Order; onTr
         <span className="min-w-0 flex-1">
           <span className="block truncate text-[14px] font-semibold text-gray-950">{name}</span>
           <span className="block truncate text-[11.5px] text-gray-500">
-            {STEP[d.status] ?? d.status}
+            {prePickup && km !== null && km <= 0.1 ? 'At the workspace' : (STEP[d.status] ?? d.status)}
             {!self && d.agent && ` · ${d.agent.vehicleNumberMasked}`}
           </span>
         </span>
