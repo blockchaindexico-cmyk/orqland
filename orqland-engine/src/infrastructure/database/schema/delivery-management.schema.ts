@@ -147,6 +147,7 @@ export const deliveryFilePurposeEnum = pgEnum('delivery_file_purpose', [
   'PROOF_OF_DELIVERY',
   'COD_PROOF',
   'SUPPORT_ATTACHMENT',
+  'ORDER_INVOICE',
 ]);
 
 export const deliveryStatementStatusEnum = pgEnum('delivery_statement_status', ['DRAFT', 'FINAL']);
@@ -303,6 +304,8 @@ export const deliveryFiles = pgTable(
     sizeBytes: integer('size_bytes').notNull(),
     sha256: char('sha256', { length: 64 }).notNull(),
     originalName: varchar('original_name', { length: 160 }),
+    /** For ORDER_INVOICE: the order the invoice belongs to (visible to that order's customer and workspace). */
+    orderId: uuid('order_id').references(() => orders.id, { onDelete: 'cascade' }),
     /** Set when the file is attached to a record; unattached uploads are purged after 24 h. */
     attachedAt: ts('attached_at'),
     deletedAt: ts('deleted_at'),
@@ -310,6 +313,7 @@ export const deliveryFiles = pgTable(
   },
   (t) => [
     index('delivery_files_owner_idx').on(t.ownerUserId, t.purpose, t.createdAt.desc()),
+    index('delivery_files_order_idx').on(t.orderId, t.purpose, t.createdAt.desc()),
     index('delivery_files_unattached_idx')
       .on(t.createdAt)
       .where(sql`${t.attachedAt} IS NULL AND ${t.deletedAt} IS NULL`),

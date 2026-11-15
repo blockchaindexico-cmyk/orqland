@@ -7,6 +7,7 @@ import {
   orderPayments,
   orders,
   orderStatusHistory,
+  orqListingVariants,
   orqspaces,
   orqUserAddresses,
   orqUsers,
@@ -20,8 +21,12 @@ import type {
   OrderPaymentType,
   OrderStatusCountType,
   OrderStatusHistoryType,
+  OrderSummaryType,
   OrderType,
 } from '../dto/types/order.type';
+import { fromPaise, toPaise } from '@/core/utils/money';
+import { ordersConfig } from '@/config/orders.config';
+import { ORDER_QUEUES, queueCondition, type OrderQueue } from '../helpers/order-queues';
 import { allowedNextStatuses } from '../helpers/order-state-machine';
 import type { OrderRow } from './lifecycle/order-lifecycle.service';
 import { OrqspaceAccessService } from './shared/orqspace-access.service';
@@ -37,6 +42,8 @@ export class OrdersQueryService {
     const actor = await this.access.assertCanManage(user, filter.orqspaceId);
     const conditions: SQL[] = [eq(orders.orqspaceId, filter.orqspaceId)];
     if (filter.statuses?.length) conditions.push(inArray(orders.orderStatus, filter.statuses));
+    const queueSql = filter.queue ? queueCondition(filter.queue) : undefined;
+    if (queueSql) conditions.push(queueSql);
     if (filter.paymentMethod) conditions.push(eq(orders.paymentMethod, filter.paymentMethod));
     if (filter.search?.trim()) {
       const term = `%${filter.search.trim()}%`;
@@ -55,7 +62,7 @@ export class OrdersQueryService {
       .select()
       .from(orders)
       .where(where)
-      .orderBy(desc(orders.createdAt))
+      .orderBy(...queueOrder(filter.queue))
       .limit(filter.pageSize)
       .offset((filter.page - 1) * filter.pageSize);
 
@@ -64,6 +71,46 @@ export class OrdersQueryService {
       total,
       page: filter.page,
       pageSize: filter.pageSize,
+    };
+  }
+
+  /** Top-of-page cards (this month vs last month) and the count on every tab. */
+  async summary(user: AuthUser, orqspaceId: string): Promise<OrderSummaryType> {
+    await this.access.assertCanManage(user, orqspaceId);
+    const tz = 'Asia/Kolkata';
+    const monthStart = sql`(date_trunc('month', now() AT TIME ZONE ${tz}) AT TIME ZONE ${tz})`;
+    const prevStart = sql`(date_trunc('month', (now() AT TIME ZONE ${tz}) - interval '1 month') AT TIME ZONE ${tz})`;
+    const todayStart = sql`(date_trunc('day', now() AT TIME ZONE ${tz}) AT TIME ZONE ${tz})`;
+    const live = sql`${orders.orderStatus} NOT IN ('CANCELLED', 'REJECTED')`;
+    const done = sql`${orders.orderStatus} IN ('DELIVERED', 'PICKED_UP')`;
+    const [row] = await this.db
+      .select({
+        salesThisMonth: sql<string>`coalesce(sum(${orders.totalAmount}) FILTER (WHERE ${live} AND ${orders.createdAt} >= ${monthStart}), 0)`,
+        salesLastMonth: sql<string>`coalesce(sum(${orders.totalAmount}) FILTER (WHERE ${live} AND ${orders.createdAt} >= ${prevStart} AND ${orders.createdAt} < ${monthStart}), 0)`,
+        completedThisMonth: sql<number>`count(*) FILTER (WHERE ${done} AND ${orders.completedAt} >= ${monthStart})::int`,
+        completedLastMonth: sql<number>`count(*) FILTER (WHERE ${done} AND ${orders.completedAt} >= ${prevStart} AND ${orders.completedAt} < ${monthStart})::int`,
+        ongoing: sql<number>`count(*) FILTER (WHERE ${orders.orderStatus} IN ('PLACED', 'ACCEPTED', 'PREPARING', 'READY_FOR_FULFILMENT', 'AWAITING_CUSTOMER_PICKUP', 'OUT_FOR_DELIVERY'))::int`,
+        newToday: sql<number>`count(*) FILTER (WHERE ${orders.createdAt} >= ${todayStart})::int`,
+      })
+      .from(orders)
+      .where(eq(orders.orqspaceId, orqspaceId));
+
+    const tabs = await Promise.all(
+      ORDER_QUEUES.map(async (queue) => {
+        const c = queueCondition(queue);
+        const [{ n }] = await this.db.select({ n: count() }).from(orders).where(c ? and(eq(orders.orqspaceId, orqspaceId), c) : eq(orders.orqspaceId, orqspaceId));
+        return { queue, count: n };
+      }),
+    );
+    const change = (now: number, before: number) => (before > 0 ? Math.round(((now - before) / before) * 1000) / 10 : null);
+    return {
+      totalSales: fromPaise(toPaise(row.salesThisMonth)),
+      totalSalesChangePercent: change(Number(row.salesThisMonth), Number(row.salesLastMonth)),
+      ongoingOrders: row.ongoing,
+      newOrdersToday: row.newToday,
+      completedOrders: row.completedThisMonth,
+      completedChangePercent: change(row.completedThisMonth, row.completedLastMonth),
+      tabs,
     };
   }
 
@@ -175,17 +222,40 @@ export class OrdersQueryService {
         ),
       )
       .orderBy(asc(orderItems.createdAt));
+    const variantIds = [...new Set(items.map((i) => i.variantId).filter((id): id is string => !!id))];
+    const stock = variantIds.length
+      ? await this.db
+          .select({ id: orqListingVariants.id, mode: orqListingVariants.inventoryMode, remaining: orqListingVariants.remainingQuantity })
+          .from(orqListingVariants)
+          .where(inArray(orqListingVariants.id, variantIds))
+      : [];
+    const remaining = new Map(stock.filter((v) => v.mode === 'LIMITED').map((v) => [v.id, v.remaining]));
     const byOrder = new Map<string, OrderItemType[]>();
-    for (const item of items) byOrder.set(item.orderId, [...(byOrder.get(item.orderId) ?? []), item]);
+    for (const item of items) {
+      const withStock = { ...item, stockRemaining: item.variantId ? (remaining.get(item.variantId) ?? null) : null };
+      byOrder.set(item.orderId, [...(byOrder.get(item.orderId) ?? []), withStock]);
+    }
 
     return rows.map((row) => {
       const orderItemsForRow = byOrder.get(row.id) ?? [];
+      const completedAt = row.completedAt ?? row.deliveredAt;
       return {
         ...row,
         items: orderItemsForRow,
         itemCount: orderItemsForRow.reduce((sum, i) => sum + i.quantity, 0),
         allowedNextStatuses: allowedNextStatuses(row.orderStatus, viewerRole),
+        returnWindowEndsAt:
+          completedAt && ordersConfig.returnWindowHours > 0 && ['DELIVERED', 'PICKED_UP'].includes(row.orderStatus)
+            ? new Date(completedAt.getTime() + ordersConfig.returnWindowHours * 3_600_000)
+            : null,
       };
     });
   }
+}
+
+/** Most urgent first: running preparation timers by deadline, upcoming by scheduled time, everything else newest first. */
+function queueOrder(queue: OrderQueue | undefined) {
+  if (queue === 'PROCESSING') return [asc(orders.preparationDueAt), asc(orders.createdAt)];
+  if (queue === 'UPCOMING' || queue === 'NEW') return [asc(sql`coalesce(${orders.scheduledFor}, ${orders.createdAt})`)];
+  return [desc(orders.createdAt)];
 }

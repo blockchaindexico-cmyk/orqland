@@ -3,6 +3,7 @@ import { Type } from 'class-transformer';
 import {
   ArrayMaxSize,
   ArrayMinSize,
+  IsDateString,
   IsIn,
   IsInt,
   IsOptional,
@@ -47,4 +48,7 @@ export class PlaceOrderInput {
   @Field(() => ID, { nullable: true }) @IsOptional() @IsUUID() addressId?: string;
 
   @Field({ nullable: true }) @IsOptional() @IsString() @MaxLength(500) customerNote?: string;
+
+  /** Optional: deliver / be ready for pickup at this time (ISO 8601). Empty = as soon as possible. */
+  @Field({ nullable: true }) @IsOptional() @IsDateString() scheduledFor?: string;
 }

@@ -30,16 +30,22 @@ export interface TransitionRequest {
   from?: OrderStatus[];
   restock?: boolean;
   metadata?: Record<string, unknown>;
+  /** Extra columns written in the same update (e.g. the preparation timer). */
+  patch?: Partial<OrderRow>;
 }
 
 /** Runs before an order is cancelled (inside the same transaction). The Delivery module registers one. */
 export type BeforeCancelHook = (tx: DbTx, order: OrderRow, actor: OrderActor) => Promise<void>;
+
+/** Runs after a transition is written (inside the same transaction), e.g. to notify an assigned agent. */
+export type AfterTransitionHook = (tx: DbTx, order: OrderRow, from: OrderStatus, actor: OrderActor) => Promise<void>;
 
 const REASON_REQUIRED: OrderStatus[] = ['REJECTED', 'CANCELLED', 'RETURNED'];
 
 @Injectable()
 export class OrderLifecycleService {
   private readonly beforeCancelHooks: BeforeCancelHook[] = [];
+  private readonly afterTransitionHooks: AfterTransitionHook[] = [];
 
   constructor(
     @Inject(DRIZZLE) private readonly db: DrizzleDB,
@@ -50,6 +56,10 @@ export class OrderLifecycleService {
 
   onBeforeCancel(hook: BeforeCancelHook): void {
     this.beforeCancelHooks.push(hook);
+  }
+
+  onAfterTransition(hook: AfterTransitionHook): void {
+    this.afterTransitionHooks.push(hook);
   }
 
   /** Validates and applies one status transition, with side effects and history, atomically. */
@@ -78,7 +88,7 @@ export class OrderLifecycleService {
         for (const hook of this.beforeCancelHooks) await hook(tx, order, req.actor);
       }
 
-      const patch = this.patchFor(req, order);
+      const patch = { ...this.patchFor(req, order), ...(req.patch ?? {}) };
       const [updated] = await tx
         .update(orders)
         .set({ ...patch, orderStatus: req.to, version: order.version + 1 })
@@ -110,6 +120,7 @@ export class OrderLifecycleService {
           after: { orderStatus: req.to },
         });
       }
+      for (const hook of this.afterTransitionHooks) await hook(tx, updated, from, req.actor);
       return updated;
     });
   }

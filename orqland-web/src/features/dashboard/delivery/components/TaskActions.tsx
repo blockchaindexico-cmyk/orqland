@@ -96,7 +96,7 @@ export function TaskActions({ task }: { task: DeliveryTask }) {
 
 const money = z.string().trim().regex(/^\d{1,10}(\.\d{1,2})?$/, 'Enter an amount like 420 or 420.50');
 
-function CompleteSelfDeliveryDialog({ task, onClose }: { task: DeliveryTask; onClose: () => void }) {
+export function CompleteSelfDeliveryDialog({ task, onClose }: { task: Pick<DeliveryTask, 'id' | 'taskNumber' | 'codAmount' | 'requiresOtp'>; onClose: () => void }) {
   const action = useDeliveryAction('selfUpdate');
   const hasCod = Number(task.codAmount) > 0;
   const schema = z.object({

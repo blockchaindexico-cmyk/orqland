@@ -1,8 +1,8 @@
 import { BadRequestException, ConflictException, Inject, Injectable, OnModuleInit } from '@nestjs/common';
-import { and, count, eq, ne } from 'drizzle-orm';
+import { and, count, eq, inArray, ne } from 'drizzle-orm';
 import type { AuthUser } from '@/core/decorators/current-user.decorator';
 import { DRIZZLE, type DrizzleDB } from '@/infrastructure/database/drizzle.module';
-import { deliveryStatusEvents, deliveryTasks, orderItems, type CodCollectionMethod } from '@/infrastructure/database/schema';
+import { deliveryStatusEvents, deliveryTasks, orderItems, type CodCollectionMethod, type OrderStatus } from '@/infrastructure/database/schema';
 import { generateTaskNumber } from '@/core/utils/public-codes';
 import { isUniqueViolation, type DbTx } from '@/core/utils/db-executor';
 import { fromPaise, toPaise } from '@/core/utils/money';
@@ -22,6 +22,9 @@ import { AssignmentEngineService, type AssignmentOutcome } from './assignment-en
 import { DeliveryOtpService } from './delivery-otp.service';
 import { TaskQueryService } from './task-query.service';
 import { TaskTransitionsService, type TaskRow, type TaskTransitionActor } from './task-transitions.service';
+
+/** Order statuses in which a delivery can be created (assignment may start during preparation). */
+export const DISPATCHABLE_ORDER_STATUSES: OrderStatus[] = ['PREPARING', 'READY_FOR_FULFILMENT'];
 
 export type SelfDeliveryStep = 'PICKED_UP' | 'IN_TRANSIT' | 'DELIVERED' | 'FAILED' | 'RETURNED_TO_ORIGIN';
 
@@ -57,6 +60,17 @@ export class DispatchService implements OnModuleInit {
   /** Cancelling an order cancels its delivery if the goods have not been picked up yet. */
   onModuleInit() {
     this.orderLifecycle.onBeforeCancel((tx, order, actor) => this.cancelActiveTaskForOrder(tx, order, actor));
+    // Agents assigned during preparation are told as soon as the order is ready to collect.
+    this.orderLifecycle.onAfterTransition(async (tx, order, from) => {
+      if (from !== 'PREPARING' || order.orderStatus !== 'READY_FOR_FULFILMENT') return;
+      const [task] = await tx
+        .select({ id: deliveryTasks.id, agentUserId: deliveryTasks.agentUserId, taskNumber: deliveryTasks.taskNumber })
+        .from(deliveryTasks)
+        .where(and(eq(deliveryTasks.orderId, order.id), inArray(deliveryTasks.status, ['ACCEPTED', 'ARRIVING_AT_PICKUP'])));
+      if (task?.agentUserId) {
+        await this.notifier.send({ userId: task.agentUserId, type: 'ORDER_READY_FOR_PICKUP', title: 'Order ready for pickup', body: `${task.taskNumber} is packed and waiting for you`, data: { taskId: task.id } });
+      }
+    });
   }
 
   async dispatch(user: AuthUser, input: DispatchOrderInput): Promise<DeliveryTaskType> {
@@ -64,7 +78,11 @@ export class DispatchService implements OnModuleInit {
     const actor = await this.access.assertCanManage(user, order.orqspaceId);
     const settings = await this.settings.ensure(order.orqspaceId);
 
-    if (order.orderStatus !== 'READY_FOR_FULFILMENT') throw new BadRequestException('Mark the order ready before dispatching it');
+    // Agents can be assigned as soon as preparation starts, so they travel to the workspace while the
+    // order is being prepared; pickup itself is only possible once the order is marked ready.
+    if (!DISPATCHABLE_ORDER_STATUSES.includes(order.orderStatus)) {
+      throw new BadRequestException('Start preparing the order before assigning a delivery');
+    }
     if (!order.deliveryAddressSnapshot) throw new BadRequestException('The customer chose pickup — there is no delivery address');
     if (input.mode === 'AGENT') {
       if (settings.pickupLat === null || settings.pickupLng === null) {
@@ -80,7 +98,7 @@ export class DispatchService implements OnModuleInit {
     try {
       taskId = await this.db.transaction(async (tx) => {
         const locked = await this.orderLifecycle.lockOrder(tx, order.id);
-        if (locked.orderStatus !== 'READY_FOR_FULFILMENT') throw new ConflictException('Order status changed, refresh and retry');
+        if (!DISPATCHABLE_ORDER_STATUSES.includes(locked.orderStatus)) throw new ConflictException('Order status changed, refresh and retry');
         // Delivery tasks exist only for physical products; services follow the separate booking pipeline (review §2.2).
         const nonProduct = await tx
           .select({ listingType: orderItems.listingType })
@@ -253,6 +271,13 @@ export class DispatchService implements OnModuleInit {
         if (!input.reason?.trim()) throw new BadRequestException('A reason is required');
         await this.transitions.apply(tx, task, input.step, performer, { reason: input.reason });
       } else {
+        if (input.step === 'PICKED_UP') {
+          // "Out for delivery" by the workspace's own staff finishes preparation in the same step.
+          const order = await this.orderLifecycle.lockOrder(tx, task.orderId);
+          if (order.orderStatus === 'PREPARING') {
+            await this.orderLifecycle.transition({ orderId: order.id, to: 'READY_FOR_FULFILMENT', actor: { userId: actor.userId, role: actor.role } }, tx);
+          }
+        }
         await this.transitions.apply(tx, task, input.step, performer, { reason: input.reason ?? null });
       }
     });

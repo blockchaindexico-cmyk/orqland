@@ -2,12 +2,14 @@ import { sql } from 'drizzle-orm';
 import {
   char,
   check,
+  date,
   index,
   integer,
   jsonb,
   numeric,
   pgEnum,
   pgTable,
+  smallint,
   text,
   timestamp,
   uniqueIndex,
@@ -110,6 +112,8 @@ export type AddressSnapshot = {
   longitude: number | null;
 };
 
+export type CancelRequestStatus = 'REQUESTED' | 'APPROVED' | 'DECLINED';
+
 export const orders = pgTable(
   'orders',
   {
@@ -137,6 +141,18 @@ export const orders = pgTable(
     deliveryAddressSnapshot: jsonb('delivery_address_snapshot').$type<AddressSnapshot>(),
     sourceAddressId: uuid('source_address_id').references(() => orqUserAddresses.id, { onDelete: 'set null' }),
     customerNote: text('customer_note'),
+    /** Customer-requested delivery / pickup time ("Delivery scheduled", "Pickup scheduled"); null = as soon as possible. */
+    scheduledFor: timestamp('scheduled_for', { withTimezone: true }),
+    /** Preparation timer set by the workspace when preparation starts (minutes) and its deadline (+2 min extensions move it). */
+    preparationMinutes: smallint('preparation_minutes'),
+    preparationDueAt: timestamp('preparation_due_at', { withTimezone: true }),
+    /** Customer cancellation request after acceptance: REQUESTED → APPROVED (order cancelled) | DECLINED. */
+    cancelRequestStatus: varchar('cancel_request_status', { length: 12 }).$type<CancelRequestStatus>(),
+    cancelRequestedAt: timestamp('cancel_requested_at', { withTimezone: true }),
+    cancelRequestReason: text('cancel_request_reason'),
+    cancelRequestResolution: text('cancel_request_resolution'),
+    /** Pickup date agreed for a requested return. */
+    returnPickupDate: date('return_pickup_date'),
     idempotencyKey: varchar('idempotency_key', { length: 64 }).notNull(),
     rejectionReason: text('rejection_reason'),
     cancellationReason: text('cancellation_reason'),
@@ -161,6 +177,8 @@ export const orders = pgTable(
       'orders_total_consistency_chk',
       sql`${t.totalAmount} = ${t.subtotalBase} + ${t.totalGst} + ${t.deliveryFee} - ${t.discountTotal}`,
     ),
+    check('orders_cancel_request_status_chk', sql`${t.cancelRequestStatus} IS NULL OR ${t.cancelRequestStatus} IN ('REQUESTED', 'APPROVED', 'DECLINED')`),
+    check('orders_preparation_minutes_chk', sql`${t.preparationMinutes} IS NULL OR ${t.preparationMinutes} BETWEEN 1 AND 480`),
     check('orders_amounts_non_negative_chk', sql`${t.totalAmount} >= 0 AND ${t.deliveryFee} >= 0`),
     check(
       'orders_delivery_address_chk',

@@ -22,6 +22,7 @@ export type DeliveryNotificationType =
   | 'DELIVERY_UNASSIGNED'
   | 'DELIVERY_STATUS_CHANGED'
   | 'DELIVERY_CANCELLED'
+  | 'ORDER_READY_FOR_PICKUP'
   | 'COD_DISCREPANCY'
   | 'EARNING_APPROVED'
   | 'EARNING_PAID'
@@ -40,6 +41,7 @@ export const NOTIFICATION_CATALOGUE: Record<DeliveryNotificationType, { group: N
   DELIVERY_STATUS_CHANGED: { group: 'DELIVERY_UPDATES', label: 'Delivery status changes', locked: false },
   DELIVERY_UNASSIGNED: { group: 'DELIVERY_UPDATES', label: 'Delivery needs an agent', locked: false },
   DELIVERY_CANCELLED: { group: 'DELIVERY_UPDATES', label: 'Delivery cancelled', locked: true },
+  ORDER_READY_FOR_PICKUP: { group: 'DELIVERY_UPDATES', label: 'Order ready for pickup', locked: true },
   CONNECTION_INVITED: { group: 'WORKSPACES', label: 'Workspace invitations', locked: false },
   CONNECTION_ACCEPTED: { group: 'WORKSPACES', label: 'Invitation accepted', locked: false },
   CONNECTION_DECLINED: { group: 'WORKSPACES', label: 'Invitation declined', locked: false },
