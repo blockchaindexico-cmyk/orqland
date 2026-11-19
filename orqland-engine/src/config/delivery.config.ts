@@ -46,6 +46,10 @@ export const deliveryConfig = {
   /** Billable km defaults to min(measured, estimated × this factor) when both exist. */
   measuredDistanceCapFactor: num('DELIVERY_MEASURED_DISTANCE_CAP', 1.5),
   /** SLA targets (minutes) used by the operations overview. */
+  /** Agents must be within this distance of the pickup point to confirm pickup. */
+  pickupGeofenceMeters: num('DELIVERY_PICKUP_GEOFENCE_METERS', 50),
+  /** A reported position less accurate than this cannot be used for the pickup geofence. */
+  pickupGeofenceMaxAccuracyMeters: num('DELIVERY_PICKUP_GEOFENCE_MAX_ACCURACY_M', 100),
   slaAcceptMinutes: num('DELIVERY_SLA_ACCEPT_MINUTES', 10),
   slaPickupMinutes: num('DELIVERY_SLA_PICKUP_MINUTES', 20),
   slaDeliverMinutes: num('DELIVERY_SLA_DELIVER_MINUTES', 45),

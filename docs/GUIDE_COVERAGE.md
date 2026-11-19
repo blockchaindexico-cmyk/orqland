@@ -61,3 +61,19 @@ Workspace admins never see KYC documents (403); only platform admins, and each v
 
 ## §11 UI direction
 Neutral `ops-theme` (black/white/neutral), status dot + label everywhere, compact tables and metric strips, map-focused live views, timeline details, phone-first Run app with ≥52px actions, labelled form errors (`FormField`, `ErrorNote`). Overview with time-to-accept / assign / pickup / deliver medians and SLA attainment (Runframe-style MTTA/MTTR analytics) · screenshot 01.
+
+## Order management redesign (Figma round)
+| Change requested | Where | Screens |
+|---|---|---|
+| 1. Order page from the Figma design: analytics on top, filters starting with **All**, a card per order that changes with its status | `dashboard/orders/components/OrdersPage.tsx`; one card per state in `orders/components/cards/` (`NewOrderCard`, `UpcomingCard`, `ProcessingCard`, `OngoingCard`, `CompletedCard`, `CancelledCard`, `SupportCard`) picked by `OrderCard.tsx` from the live order status | 30, 31, 33–37 |
+| 2. Geofenced pickup — agent within 50 m | Engine: `delivery/helpers/pickup-geofence.ts` + `agent-task-actions.service.ts#confirmPickup` (`DELIVERY_PICKUP_GEOFENCE_METERS`). Run: distance banner and disabled “Confirm pickup” in `orqlandRun/components/ActiveJob.tsx` (`pickupGate`) | 41, 42 |
+| 3. Live tracking inside the order view | `orders/components/OrderView.tsx` → `OrderLiveTracking.tsx` (agent position, recorded route, distance, ETA, location freshness, partner, steps); “Track” on the order card opens it | 38, 39 |
+| 4. Assign the delivery agent from “start preparation” | Engine: `DISPATCHABLE_ORDER_STATUSES = PREPARING, READY_FOR_FULFILMENT` in `dispatch.service.ts`; pickup blocked until prepared (`ORDER_NOT_READY`); `ORDER_READY_FOR_PICKUP` notification. Web: partner picker on the processing card (`cards/DeliveryPartner.tsx`), Delivery → Assignment lists preparing orders | 32, 39 |
+| 5. Proof of delivery — photo only | Run: `orqlandRun/components/CameraCapture.tsx` (live camera, no file picker). Engine: `completeDelivery` rejects photos uploaded before pickup (`delivery-files.service.ts#assertCapturedAfter`) | 43, 44 |
+| 6. Summary cards: total sales, ongoing, completed | `orqspaceOrderSummary` in `orders-query.service.ts`; `SummaryCard` in `OrdersPage.tsx` | 30 |
+| 7. Tabs: All, Processing, Ongoing, Upcoming, Completed, Cancelled | `ORDER_TABS` (+ Support for returns/refunds); server-side queues in `orders/helpers/order-queues.ts`, counts from the summary | 30, 32–37 |
+| 8. Processing cards blink red as the timer runs low | `cards/PrepTimer.tsx` + `prepUrgency()` in `orders/utils/order-display.ts`; `styles/order-cards.css` (respects reduced motion; solid red when overdue) | 32, 40 |
+
+Card actions follow the Figma set: Accept / Decline and **Accept all** (new entries), **Start Preparation** with minutes (upcoming), **+2 Mins** and **Mark as prepared** (processing), **Track**, **Navigate** / **Arrived** for own-staff delivery and **Customer collected** (ongoing), return-window pie and invoice **Browse / Upload** (completed), **Approve Cancel** / Decline (customer cancel requests), return pickup date → **Confirm Pickup** and **Approve Refund** (support).
+
+Not in this round: the service-booking cards (separate bookings pipeline, Q-2) and customer re-schedule / time-change requests — see `MERGE_GUIDE.md` §5.

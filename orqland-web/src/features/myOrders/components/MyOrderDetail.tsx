@@ -5,16 +5,20 @@ import { useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { Sheet, SheetContent, SheetDescription, SheetTitle } from '@/components/ui/sheet';
 import { Skeleton } from '@/components/ui/skeleton';
+import { ProtectedFileLink } from '@/features/dashboard/common/components/ProtectedFileLink';
 import { ReasonDialog } from '@/features/dashboard/common/components/ReasonDialog';
 import { SectionLabel } from '@/components/ui/panel';
 import { StatusDot } from '@/components/ui/status-dot';
 import { Timeline } from '@/components/ui/timeline';
-import { formatAddress, formatDateTime, formatMoney, humanize } from '@/features/dashboard/common/utils/format';
+import { formatAddress, formatDate, formatDateTime, formatMoney, humanize } from '@/features/dashboard/common/utils/format';
 import { gqlErrorMessage } from '@/features/dashboard/common/utils/gqlError';
 import { metaOf, ORDER_STATUS, PAYMENT_STATUS } from '@/features/dashboard/common/utils/status';
 import { cn } from '@/lib/utils';
 import { useMyOrder, useMyOrderAction } from '../hooks/useMyOrders';
 import type { MyOrderDetail as Order } from '../types/my-orders.types';
+
+/** After the shop accepts, the customer can only ask to cancel; the shop approves or declines. */
+const CANCEL_REQUESTABLE = ['ACCEPTED', 'PREPARING', 'READY_FOR_FULFILMENT', 'AWAITING_CUSTOMER_PICKUP'];
 
 const DELIVERY_STEPS = ['PLACED', 'ACCEPTED', 'PREPARING', 'READY_FOR_FULFILMENT', 'OUT_FOR_DELIVERY', 'DELIVERED'];
 const PICKUP_STEPS = ['PLACED', 'ACCEPTED', 'PREPARING', 'AWAITING_CUSTOMER_PICKUP', 'PICKED_UP'];
@@ -51,6 +55,11 @@ export function MyOrderDetail({ orderId, onClose }: { orderId: string | null; on
   const requestReturn = useMyOrderAction('requestReturn');
   const [dialog, setDialog] = useState<'cancel' | 'return' | null>(null);
   const action = dialog === 'cancel' ? cancel : requestReturn;
+  const canCancel = !!order?.allowedNextStatuses.includes('CANCELLED');
+  const cancelAsked = order?.cancelRequestStatus === 'REQUESTED' && CANCEL_REQUESTABLE.includes(order.orderStatus);
+  const canAskCancel = !!order && !canCancel && !cancelAsked && CANCEL_REQUESTABLE.includes(order.orderStatus);
+  const returnOpen = !order?.returnWindowEndsAt || new Date(order.returnWindowEndsAt).getTime() > Date.now();
+  const canReturn = !!order?.allowedNextStatuses.includes('RETURN_REQUESTED') && returnOpen;
 
   return (
     <Sheet open={!!orderId} onOpenChange={(o) => !o && onClose()}>
@@ -74,6 +83,27 @@ export function MyOrderDetail({ orderId, onClose }: { orderId: string | null; on
               </div>
             </div>
             <Progress order={order} />
+
+            {order.scheduledFor && !['DELIVERED', 'PICKED_UP', 'CANCELLED', 'REJECTED'].includes(order.orderStatus) && (
+              <p className="rounded-md bg-muted px-3 py-2 text-sm">
+                Scheduled for <span className="font-medium">{formatDateTime(order.scheduledFor)}</span>
+              </p>
+            )}
+            {cancelAsked && (
+              <p role="status" className="rounded-md border border-border px-3 py-2 text-sm">
+                You asked to cancel. The shop will approve or decline your request shortly.
+              </p>
+            )}
+            {order.cancelRequestStatus === 'DECLINED' && CANCEL_REQUESTABLE.includes(order.orderStatus) && (
+              <p className="rounded-md border border-border px-3 py-2 text-sm">
+                The shop couldn’t cancel this order{order.cancelRequestResolution ? `: ${order.cancelRequestResolution}` : '.'}
+              </p>
+            )}
+            {order.orderStatus === 'RETURN_REQUESTED' && (
+              <p className="rounded-md bg-muted px-3 py-2 text-sm">
+                Return requested.{order.returnPickupDate ? ` Pickup scheduled for ${formatDate(order.returnPickupDate)}.` : ' The shop will schedule a pickup.'}
+              </p>
+            )}
 
             {order.deliveryOtp && (
               <div className="rounded-xl bg-foreground p-4 text-background">
@@ -105,6 +135,12 @@ export function MyOrderDetail({ orderId, onClose }: { orderId: string | null; on
               </div>
             </Section>
 
+            {order.invoice && (
+              <Section title="Invoice">
+                <ProtectedFileLink fileId={order.invoice.id} label={order.invoice.originalName ?? 'Download invoice'} />
+              </Section>
+            )}
+
             {order.deliveryAddressSnapshot && (
               <Section title="Delivering to">
                 <p className="text-sm">{formatAddress(order.deliveryAddressSnapshot)}</p>
@@ -124,23 +160,32 @@ export function MyOrderDetail({ orderId, onClose }: { orderId: string | null; on
             </Section>
 
             <div className="flex flex-col gap-2">
-              {order.allowedNextStatuses.includes('CANCELLED') && (
+              {(canCancel || canAskCancel) && (
                 <Button variant="outline" onClick={() => setDialog('cancel')}>
-                  Cancel order
+                  {canCancel ? 'Cancel order' : 'Ask to cancel'}
                 </Button>
               )}
-              {order.allowedNextStatuses.includes('RETURN_REQUESTED') && (
-                <Button variant="outline" onClick={() => setDialog('return')}>
-                  Request a return
-                </Button>
+              {canReturn && (
+                <>
+                  <Button variant="outline" onClick={() => setDialog('return')}>
+                    Request a return
+                  </Button>
+                  {order.returnWindowEndsAt && <p className="text-center text-[12px] text-muted-foreground">Returns accepted until {formatDateTime(order.returnWindowEndsAt)}</p>}
+                </>
               )}
             </div>
             <ReasonDialog
               open={!!dialog}
               onOpenChange={(o) => !o && setDialog(null)}
-              title={dialog === 'cancel' ? 'Cancel this order?' : 'Request a return'}
-              description={dialog === 'cancel' ? 'You can cancel until the shop confirms your order.' : 'The shop reviews your request and arranges the return.'}
-              confirmLabel={dialog === 'cancel' ? 'Cancel order' : 'Send request'}
+              title={dialog === 'cancel' ? (canCancel ? 'Cancel this order?' : 'Ask the shop to cancel?') : 'Request a return'}
+              description={
+                dialog === 'cancel'
+                  ? canCancel
+                    ? 'The shop hasn’t confirmed it yet, so it is cancelled straight away.'
+                    : 'The shop has already started on your order, so it decides whether it can still be cancelled.'
+                  : 'The shop reviews your request and arranges the return.'
+              }
+              confirmLabel={dialog === 'cancel' ? (canCancel ? 'Cancel order' : 'Send request') : 'Send request'}
               destructive={dialog === 'cancel'}
               pending={action.isPending}
               error={action.error ? gqlErrorMessage(action.error) : null}

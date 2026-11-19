@@ -151,9 +151,10 @@ describe('Order → agent delivery → COD → earnings', () => {
     orderId = first.orders[0].id;
   });
 
-  it('cannot be dispatched before it is ready, or to agents before a pickup point exists', async () => {
-    expect(await gqlError(SEED.owner, `mutation($i: DispatchOrderInput!) { dispatchOrder(input: $i) { id } }`, { i: { orderId, mode: 'AGENT', assignmentType: 'AUTO' } })).toMatch(/ready/);
-    await advanceToReady(orderId);
+  it('can be dispatched once preparation starts (not before), and to agents only with a pickup point', async () => {
+    expect(await gqlError(SEED.owner, `mutation($i: DispatchOrderInput!) { dispatchOrder(input: $i) { id } }`, { i: { orderId, mode: 'AGENT', assignmentType: 'AUTO' } })).toMatch(/Start preparing the order/);
+    // Agent assignment is allowed from "start preparation", so the agent travels while the order is prepared.
+    for (const m of ['acceptOrder', 'startPreparingOrder']) await gql(SEED.owner, `mutation($id: ID!) { ${m}(input: { orderId: $id }) { orderStatus } }`, { id: orderId });
     expect(await gqlError(SEED.owner, `mutation($i: DispatchOrderInput!) { dispatchOrder(input: $i) { id } }`, { i: { orderId, mode: 'AGENT', assignmentType: 'AUTO' } })).toMatch(/pickup location/);
     await gql(SEED.owner, `mutation($i: UpdateDeliverySettingsInput!) { updateOrqspaceDeliverySettings(input: $i) { readyForAgentDispatch } }`, {
       i: { orqspaceId: SEED.orqspace, pickupLat: 13.0827, pickupLng: 80.2707, pickupAddress: { street: 'Anna Salai', city: 'Chennai', pincode: '600002' }, autoAssignEnabled: true },
@@ -201,9 +202,21 @@ describe('Order → agent delivery → COD → earnings', () => {
   });
 
   it('runs pickup → transit → delivery with OTP and COD; order follows the task', async () => {
-    const step = (m: string) => gql(SEED.agentRavi, `mutation($i: TaskActionInput!) { ${m}(input: $i) { status } }`, { i: { taskId } });
+    const step = (m: string, at: Record<string, number> = {}) => gql(SEED.agentRavi, `mutation($i: TaskActionInput!) { ${m}(input: $i) { status } }`, { i: { taskId, ...at } });
+    const PICKUP_SPOT = { lat: 13.0828, lng: 80.2708, accuracyM: 12 }; // ~15 m from the pickup point
     await step('markArrivingAtPickup');
-    await step('confirmDeliveryPickup');
+    // Geofence: pickup can only be confirmed within 50 m of the pickup point, with a location.
+    expect(await gqlError(SEED.agentRavi, `mutation($i: TaskActionInput!) { confirmDeliveryPickup(input: $i) { status } }`, { i: { taskId } })).toMatch(/Turn on location/);
+    expect(
+      await gqlError(SEED.agentRavi, `mutation($i: TaskActionInput!) { confirmDeliveryPickup(input: $i) { status } }`, { i: { taskId, lat: 13.0866, lng: 80.2707, accuracyM: 10 } }),
+    ).toMatch(/^You are 4\d\d m from the pickup point\. Move within 50 m to confirm pickup$/);
+    // At the pickup point but the order is still being prepared.
+    expect(await gqlError(SEED.agentRavi, `mutation($i: TaskActionInput!) { confirmDeliveryPickup(input: $i) { status } }`, { i: { taskId, ...PICKUP_SPOT } })).toMatch(/still preparing/);
+    await gql(SEED.owner, `mutation($id: ID!) { markOrderReady(input: { orderId: $id }) { orderStatus } }`, { id: orderId });
+    const ready = (await gql(SEED.agentRavi, `query { myDeliveryNotifications { items { type } } }`)).myDeliveryNotifications.items;
+    expect(ready.map((n: { type: string }) => n.type)).toContain('ORDER_READY_FOR_PICKUP');
+    const photoBeforePickup = await uploadFile(SEED.agentRavi, 'PROOF_OF_DELIVERY');
+    await step('confirmDeliveryPickup', PICKUP_SPOT);
     expect((await gql(SEED.owner, ORDER, { id: orderId })).orqspaceOrder.orderStatus).toBe('OUT_FOR_DELIVERY');
     await step('startDeliveryTransit');
 
@@ -214,8 +227,14 @@ describe('Order → agent delivery → COD → earnings', () => {
     const otp = (await gql(SEED.customer, `query($id: ID!) { myOrder(orderId: $id) { deliveryOtp } }`, { id: orderId })).myOrder.deliveryOtp;
     expect(otp).toMatch(/^\d{4}$/);
     expect(await gqlError(SEED.agentRavi, `mutation($i: CompleteDeliveryInput!) { completeDelivery(input: $i) { status } }`, { i: { taskId, otp } })).toMatch(/cash collected/);
+    // Proof of delivery is photo-only and must be captured during this delivery — an older picture is refused.
+    expect(
+      await gqlError(SEED.agentRavi, `mutation($i: CompleteDeliveryInput!) { completeDelivery(input: $i) { status } }`, {
+        i: { taskId, otp, codCollectedAmount: '420', codMethod: 'CASH', photoFileId: photoBeforePickup },
+      }),
+    ).toMatch(/Take a new photo at the door/);
     const done = await gql(SEED.agentRavi, `mutation($i: CompleteDeliveryInput!) { completeDelivery(input: $i) { status } }`, {
-      i: { taskId, otp, codCollectedAmount: '420', codMethod: 'CASH', recipientName: 'Maria' },
+      i: { taskId, otp, codCollectedAmount: '420', codMethod: 'CASH', recipientName: 'Maria', photoFileId: await uploadFile(SEED.agentRavi, 'PROOF_OF_DELIVERY') },
     });
     expect(done.completeDelivery.status).toBe('DELIVERED');
 

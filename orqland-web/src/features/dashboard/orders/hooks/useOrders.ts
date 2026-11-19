@@ -9,6 +9,7 @@ export const orderKeys = {
   all: ['orders'] as const,
   list: (filter: OrdersFilter) => ['orders', 'list', filter] as const,
   counts: (orqspaceId: string) => ['orders', 'counts', orqspaceId] as const,
+  summary: (orqspaceId: string) => ['orders', 'summary', orqspaceId] as const,
   detail: (orderId: string) => ['orders', 'detail', orderId] as const,
 };
 
@@ -18,7 +19,7 @@ export function useOrqspaceOrders(filter: OrdersFilter | null) {
     queryFn: () => ordersService.list(filter!),
     enabled: !!filter,
     placeholderData: keepPreviousData,
-    refetchInterval: 20_000,
+    refetchInterval: 15_000,
   });
 }
 
@@ -28,6 +29,19 @@ export function useOrderCounts(orqspaceId: string | null) {
     queryFn: () => ordersService.counts(orqspaceId!),
     enabled: !!orqspaceId,
     refetchInterval: 20_000,
+  });
+}
+
+export function useOrderSummary(orqspaceId: string | null) {
+  return useQuery({ queryKey: orderKeys.summary(orqspaceId ?? 'none'), queryFn: () => ordersService.summary(orqspaceId!), enabled: !!orqspaceId, refetchInterval: 20_000 });
+}
+
+/** Upload (REST) + attach an invoice to a completed order. */
+export function useAttachInvoice() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({ orderId, fileId }: { orderId: string; fileId: string }) => ordersService.attachInvoice(orderId, fileId),
+    onSuccess: () => void queryClient.invalidateQueries({ queryKey: orderKeys.all }),
   });
 }
 

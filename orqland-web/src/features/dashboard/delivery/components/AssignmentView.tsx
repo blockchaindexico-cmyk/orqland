@@ -17,7 +17,8 @@ import { agentBlocker, distanceFromPickup, DispatchDialog, type DispatchTarget }
 import { OfferCountdown } from './OfferCountdown';
 
 /**
- * Manual & automatic assignment board (guide §6 B–C): ready orders waiting for a delivery method,
+ * Manual & automatic assignment board (guide §6 B–C): orders in preparation or prepared that still need
+ * a delivery partner (assigning during preparation lets the agent travel while the order is made),
  * deliveries still looking for an agent, and the connected agents who can take them.
  */
 export function AssignmentView({ orqspaceId, onOpenTask }: { orqspaceId: string; onOpenTask: (taskId: string) => void }) {
@@ -25,7 +26,7 @@ export function AssignmentView({ orqspaceId, onOpenTask }: { orqspaceId: string;
   const settings = useDeliverySettings(orqspaceId);
   const live = useLiveDeliveries(orqspaceId);
   const agents = useDeliveryAgents(orqspaceId, ['ACTIVE']);
-  const ready = useOrqspaceOrders({ orqspaceId, statuses: ['READY_FOR_FULFILMENT'], page: 1, pageSize: 50 });
+  const ready = useOrqspaceOrders({ orqspaceId, statuses: ['PREPARING', 'READY_FOR_FULFILMENT'], page: 1, pageSize: 50 });
   const updateSettings = useDeliveryAction('updateSettings');
   const [target, setTarget] = useState<{ target: DispatchTarget; agent?: string } | null>(null);
   const [pickAgent, setPickAgent] = useState<string | null>(null);
@@ -35,7 +36,7 @@ export function AssignmentView({ orqspaceId, onOpenTask }: { orqspaceId: string;
 
   const dispatchedOrders = new Set(live.data.map((t) => t.orderId));
   const waitingOrders = ready.data.items.filter((o) => !dispatchedOrders.has(o.id) && o.requestedFulfilment === 'DELIVERY');
-  const pickupOrders = ready.data.items.filter((o) => o.requestedFulfilment === 'PICKUP');
+  const pickupOrders = ready.data.items.filter((o) => o.requestedFulfilment === 'PICKUP' && o.orderStatus === 'READY_FOR_FULFILMENT');
   const unassigned: DeliveryTask[] = live.data.filter((t) => t.mode === 'AGENT' && ['PENDING_ASSIGNMENT', 'OFFERED'].includes(t.status));
   const s = settings.data;
 
@@ -63,9 +64,9 @@ export function AssignmentView({ orqspaceId, onOpenTask }: { orqspaceId: string;
 
       <div className="grid gap-5 xl:grid-cols-[minmax(0,1.4fr)_minmax(0,1fr)]">
         <div className="min-w-0 space-y-5">
-          <Panel title="Ready to dispatch" description="Prepared orders that still need a delivery method" actions={<span className="tabular text-[12px] text-muted-foreground">{waitingOrders.length}</span>}>
+          <Panel title="Needs a delivery partner" description="In preparation or prepared — assign early so the agent arrives as the order is ready" actions={<span className="tabular text-[12px] text-muted-foreground">{waitingOrders.length}</span>}>
             {waitingOrders.length === 0 ? (
-              <EmptyState title="Nothing waiting" body="Orders appear here once they are marked ready for fulfilment." />
+              <EmptyState title="Nothing waiting" body="Orders appear here as soon as preparation starts." />
             ) : (
               <Table>
                 <THead>
@@ -73,7 +74,7 @@ export function AssignmentView({ orqspaceId, onOpenTask }: { orqspaceId: string;
                     <TH>Order</TH>
                     <TH>Customer</TH>
                     <TH align="right">Value</TH>
-                    <TH align="right">Waiting</TH>
+                    <TH>Stage</TH>
                     <TH />
                   </tr>
                 </THead>
@@ -89,7 +90,21 @@ export function AssignmentView({ orqspaceId, onOpenTask }: { orqspaceId: string;
                         {formatMoney(o.totalAmount)}
                         <span className="block text-[11px] text-muted-foreground">{o.paymentMethod === 'COD' ? 'Cash on delivery' : 'Paid online'}</span>
                       </TD>
-                      <TD align="right">{formatMinutes(minutesSince(o.createdAt, now))}</TD>
+                      <TD>
+                        {o.orderStatus === 'PREPARING' ? (
+                          <>
+                            Preparing
+                            <span className="block text-[11px] text-muted-foreground">
+                              {o.preparationDueAt ? `ready in ${formatMinutes(Math.max(0, -(minutesSince(o.preparationDueAt, now) ?? 0)))}` : 'no timer'}
+                            </span>
+                          </>
+                        ) : (
+                          <>
+                            Prepared
+                            <span className="block text-[11px] text-muted-foreground">waiting {formatMinutes(minutesSince(o.readyAt ?? o.createdAt, now))}</span>
+                          </>
+                        )}
+                      </TD>
                       <TD align="right">
                         <Button size="sm" onClick={() => setTarget({ target: { kind: 'dispatch', orderId: o.id, orderNumber: o.orderNumber }, agent: pickAgent ?? undefined })}>
                           {pickAgent ? 'Send to selected agent' : 'Dispatch'}

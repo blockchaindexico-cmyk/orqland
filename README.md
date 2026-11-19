@@ -4,7 +4,7 @@
 |---|---|
 | `docs/SCHEMA_DESIGN.md` | Database design: 22 approved tables + 3 proposed additions (§11), no changes to existing tables. ER diagram, lifecycles, open questions |
 | `docs/GUIDE_COVERAGE.md` | Each requirement of the reference guide → where it is implemented |
-| `docs/screenshots/` | 28 screens: workspace operations console (01–10), Orqland Run on a phone (11–28) |
+| `docs/screenshots/` | 43 screens: workspace operations console (01–10), Orqland Run on a phone (11–28), Figma order management — summary, tabs, status cards, order view with live tracking (30–40), geofenced pickup and camera-only proof photo in Run (41–44) |
 | `MERGE_GUIDE.md` | Step-by-step merge into your main repos |
 | `copy-to-main.sh` | Copies only the new files (never overwrites) |
 | `orqland-engine/` | NestJS 11 + GraphQL + Drizzle harness: `src/modules/orders`, `src/modules/delivery`, new schema files, migration, tests |

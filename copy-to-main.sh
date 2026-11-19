@@ -30,6 +30,7 @@ WEB_FILES=(
   "src/app/(protected)/(account_center)/orqland-run/page.tsx"
   "src/app/(protected)/(account_center)/my-orders/page.tsx"
   src/styles/ops-theme.css
+  src/styles/order-cards.css
   # New shared primitives (copied only if you don't already have a file with the same name)
   src/components/ui/bar-chart.tsx
   src/components/ui/form-field.tsx

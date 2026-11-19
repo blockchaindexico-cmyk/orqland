@@ -9,6 +9,7 @@ import {
   orderStatusEnum,
 } from '@/infrastructure/database/schema';
 import { gqlEnumFrom } from '@/core/utils/gql-enum';
+import { ORDER_QUEUES } from '../../helpers/order-queues';
 
 export const ActorRoleGql = gqlEnumFrom(actorRoleEnum.enumValues, 'ActorRole');
 export const OrderStatusGql = gqlEnumFrom(orderStatusEnum.enumValues, 'OrderStatus');
@@ -24,3 +25,4 @@ export const OrderPaymentRecordStatusGql = gqlEnumFrom(
   orderPaymentRecordStatusEnum.enumValues,
   'OrderPaymentRecordStatus',
 );
+export const OrderQueueGql = gqlEnumFrom(ORDER_QUEUES, 'OrderQueue');

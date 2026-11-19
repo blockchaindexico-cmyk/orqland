@@ -1,4 +1,12 @@
-import { Context, Parent, ResolveField, Resolver } from '@nestjs/graphql';
+import { Inject, UseGuards } from '@nestjs/common';
+import { Args, Context, Field, Float, ID, Int, Mutation, ObjectType, Parent, ResolveField, Resolver } from '@nestjs/graphql';
+import { eq } from 'drizzle-orm';
+import { GqlAuthGuard } from '@/core/guards/gql-auth.guard';
+import { CurrentUser } from '@/core/decorators/current-user.decorator';
+import { DRIZZLE, type DrizzleDB } from '@/infrastructure/database/drizzle.module';
+import { orqspaceDeliverySettings } from '@/infrastructure/database/schema';
+import { haversineKm, round2, toLatLng } from '../helpers/geo';
+import { DeliveryFilesService, type DeliveryFileRow } from '../services/files/delivery-files.service';
 import type { AuthUser } from '@/core/decorators/current-user.decorator';
 import { OrderType } from '@/modules/orders/dto/types/order.type';
 import { OrqspaceAccessService } from '@/modules/orders/services/shared/orqspace-access.service';
@@ -51,13 +59,53 @@ export class AgentConnectionFieldsResolver {
   }
 }
 
+@ObjectType('OrderDocument')
+export class OrderDocumentType {
+  @Field(() => ID) id: string;
+  @Field() mimeType: string;
+  @Field(() => Int) sizeBytes: number;
+  @Field(() => String, { nullable: true }) originalName: string | null;
+  @Field() createdAt: Date;
+}
+
+const toDocument = (row: DeliveryFileRow | null): OrderDocumentType | null =>
+  row ? { id: row.id, mimeType: row.mimeType, sizeBytes: row.sizeBytes, originalName: row.originalName, createdAt: row.createdAt } : null;
+
 /** Adds the delivery record to the Order type without the Orders module depending on Delivery. */
 @Resolver(() => OrderType)
 export class OrderDeliveryFieldsResolver {
   constructor(
+    @Inject(DRIZZLE) private readonly db: DrizzleDB,
     private readonly tasks: TaskQueryService,
     private readonly otp: DeliveryOtpService,
+    private readonly files: DeliveryFilesService,
   ) {}
+
+  /** Latest invoice uploaded by the workspace (bytes via GET /delivery/files/:id — customer and workspace only). */
+  @ResolveField(() => OrderDocumentType, { nullable: true })
+  async invoice(@Parent() order: OrderType) {
+    return toDocument(await this.files.latestInvoice(order.id));
+  }
+
+  /** Road-distance estimate from the workspace pickup point to the delivery address (km). */
+  @ResolveField(() => Float, { nullable: true })
+  async distanceFromPickupKm(@Parent() order: OrderType) {
+    const drop = toLatLng(order.deliveryAddressSnapshot?.latitude, order.deliveryAddressSnapshot?.longitude);
+    if (!drop) return null;
+    const [settings] = await this.db
+      .select({ lat: orqspaceDeliverySettings.pickupLat, lng: orqspaceDeliverySettings.pickupLng, factor: orqspaceDeliverySettings.roadDistanceFactor })
+      .from(orqspaceDeliverySettings)
+      .where(eq(orqspaceDeliverySettings.orqspaceId, order.orqspaceId));
+    const pickup = toLatLng(settings?.lat, settings?.lng);
+    return pickup ? round2(haversineKm(pickup, drop) * Number(settings!.factor)) : null;
+  }
+
+  /** Workspace attaches an uploaded invoice (POST /delivery/files?purpose=ORDER_INVOICE) to a completed order. */
+  @Mutation(() => OrderDocumentType)
+  @UseGuards(GqlAuthGuard)
+  async attachOrderInvoice(@CurrentUser() user: AuthUser, @Args('orderId', { type: () => ID }) orderId: string, @Args('fileId', { type: () => ID }) fileId: string) {
+    return toDocument(await this.files.attachOrderInvoice(user, orderId, fileId));
+  }
 
   @ResolveField(() => DeliveryTaskType, { nullable: true })
   delivery(@Parent() order: OrderType, @Context() ctx: GqlContext) {

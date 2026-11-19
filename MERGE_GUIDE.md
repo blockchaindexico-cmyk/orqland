@@ -2,13 +2,13 @@
 
 Built to your documented structure: NestJS `src/modules/<feature>/{dto/{inputs,types,enums},resolvers,services,helpers}` and Drizzle schemas in `src/infrastructure/database/schema/` (engine), and `src/features/<feature>/{components,graphql,hooks,services,types}` with Next.js App Router route groups (web).
 
-**Status:** schema approved by the Core Engine Architecture team (review of 3 Nov 2026) with minor alignments — all applied; see `docs/SCHEMA_DESIGN.md` §10. The gap-closure round (licence images, disconnect requests, statements, notification preferences) adds three tables and a few nullable columns, isolated in migration `0002` and flagged **pending approval** in §11 of the schema doc. Merge target: `dev`.
+**Status:** schema approved by the Core Engine Architecture team (review of 3 Nov 2026) with minor alignments — all applied; see `docs/SCHEMA_DESIGN.md` §10. The gap-closure round (licence images, disconnect requests, statements, notification preferences) adds three tables and a few nullable columns, isolated in migration `0002` and flagged **pending approval** in §11 of the schema doc. The order-cards round (Figma order management: preparation timer, scheduled orders, cancel requests, returns, refunds, invoices) adds only nullable columns on the module's own `orders` and `delivery_files` tables in migration `0003` — **pending approval**, §12. Merge target: `dev`.
 
 Each harness folder also contains **host stand-ins** — files your repos already have (auth guard, Drizzle provider, existing tables, UI primitives, layouts). Every stand-in starts with `[HOST SHIM]`. **Do not copy them.**
 
 ---
 
-## 1. Copy the new files (177 files)
+## 1. Copy the new files (198 files)
 
 ```bash
 ./copy-to-main.sh /path/to/orqland-engine /path/to/orqland-web
@@ -19,7 +19,7 @@ The script only adds files. If a file already exists it prints `CONFLICT` and le
 | Repo | New files |
 |---|---|
 | engine | `src/modules/orders/**`, `src/modules/delivery/**` (including unit + e2e specs); three schema files in `src/infrastructure/database/schema/` — `orders.schema.ts`, `delivery-management.schema.ts`, `delivery-support.schema.ts`; `src/config/{orders,delivery}.config.ts` (all env access); `src/core/utils/{db-executor,gql-enum,money,public-codes,workspace-access}.ts` |
-| web | `src/features/dashboard/{common,orders,delivery}/**`, `src/features/orqlandRun/**`, `src/features/myOrders/**`, 4 route pages, `src/styles/ops-theme.css`, and nine new primitives in `src/components/ui/` (`status-dot`, `metric`, `timeline`, `table`, `panel`, `underline-tabs`, `form-field`, `map-view`, `bar-chart`) |
+| web | `src/features/dashboard/{common,orders,delivery}/**` (the Orders page cards live in `orders/components/cards/`), `src/features/orqlandRun/**`, `src/features/myOrders/**`, 4 route pages, `src/styles/ops-theme.css`, `src/styles/order-cards.css`, and nine new primitives in `src/components/ui/` (`status-dot`, `metric`, `timeline`, `table`, `panel`, `underline-tabs`, `form-field`, `map-view`, `bar-chart`) |
 
 ---
 
@@ -122,6 +122,14 @@ Optional, with defaults (all read in `src/config/*.config.ts`):
 | `ORDER_PAYMENT_HOLD_MINUTES` | 60 | Unpaid ONLINE orders still `PLACED` after this are cancelled by SYSTEM and their stock released (`0` disables) |
 | `ORDER_SLA_ACCEPT_MINUTES`, `DELIVERY_SLA_{ACCEPT,PICKUP,DELIVER}_MINUTES` | 15, 10, 20, 45 | SLA targets on the operations console |
 | `DELIVERY_STALE_LOCATION_SECONDS` | 120 | When an agent's position counts as stale |
+| `DELIVERY_PICKUP_GEOFENCE_METERS` | 50 | Agent must be this close to the pickup point to confirm pickup |
+| `DELIVERY_PICKUP_GEOFENCE_MAX_ACCURACY_M` | 100 | GPS fixes less accurate than this can't confirm pickup |
+| `ORDER_DEFAULT_PREPARATION_MINUTES` | 15 | Preparation timer when the workspace doesn't choose one |
+| `ORDER_PREPARATION_EXTENSION_MINUTES` | 2 | "+2 Mins" on the preparation timer |
+| `ORDER_RETURN_WINDOW_HOURS` | 48 | Returns can be requested this long after delivery / collection (`0` = no limit) |
+| `ORDER_MAX_SCHEDULE_DAYS` | 14 | How far ahead a customer can schedule an order |
+
+The web app mirrors three of these for display: `PICKUP_GEOFENCE_M` in `orqlandRun/components/ActiveJob.tsx`, and `DEFAULT_PREP_MINUTES` / `PREP_EXTENSION_MINUTES` in `dashboard/orders/utils/order-display.ts`. Keep them in step if you change the engine values (the engine always enforces its own).
 
 Keep the two secrets in your secret manager. Business-rule overrides (re-KYC months, limits, retention) are listed in `.env.example` with their defaults.
 
@@ -129,7 +137,7 @@ Keep the two secrets in your secret manager. Business-rule overrides (re-KYC mon
 
 Run `pnpm run migration:generate` in your repo, so the migration chains onto your own Drizzle snapshot. **Review it before applying.** It must contain only `CREATE TYPE`, `CREATE TABLE`, `CREATE INDEX`, `ADD CONSTRAINT … FOREIGN KEY` and `ADD COLUMN` on the module's **own** tables (25 new tables) — no `ALTER` or `DROP` on existing ORQLAND tables.
 
-Reference output, generated against the stand-in tables: `orqland-engine/drizzle/0001_orders_delivery_modules.sql` (the approved 22 tables) and `0002_delivery_files_statements_prefs.sql` (the proposed additions: `delivery_files`, `delivery_statements`, `delivery_notification_preferences` and nullable columns for document references and disconnect requests). Then:
+Reference output, generated against the stand-in tables: `orqland-engine/drizzle/0001_orders_delivery_modules.sql` (the approved 22 tables) `0002_delivery_files_statements_prefs.sql` (the proposed additions: `delivery_files`, `delivery_statements`, `delivery_notification_preferences` and nullable columns for document references and disconnect requests) and `0003_order_cards_prep_cancel_returns.sql` (nullable `orders` columns for the preparation timer, schedule, cancel requests and return pickup; `ORDER_INVOICE` file purpose and `delivery_files.order_id`). Then:
 
 ```bash
 pnpm run migration:migrate
@@ -214,18 +222,20 @@ Then walk through the flow:
 1. User → Orqland Run → Register: licence number + date of birth + **licence front/back photos**, vehicle + optional RC photo, consent (with `SUREPASS_MODE=mock` locally) → status **Active**.
 2. Workspace → Delivery operations → Settings: set the pickup point → Agents: search an Orq ID, invite with a ₹/km rate.
 3. Agent → Run → Workspaces: accept the invitation → Home: go **Online** (GPS chip turns on).
-4. Customer places a COD order → Orders: Accept → Start preparing → Mark ready → Delivery operations → Assignment: Dispatch (automatic, or choose an agent).
-5. Agent → Run → Deliveries: accept the request (countdown, estimate) → heading to pickup → confirm pickup → start trip → Complete: customer code, proof photo, cash collected (and UPI proof if not cash).
-6. Workspace → Live map: follow the agent on the map with the timeline → COD: record the handover → the order shows **Paid** → Costs & statements: approve the earning, mark paid.
+4. Customer places a COD order → Orders (summary cards, tabs All · Processing · Ongoing · Upcoming · Completed · Cancelled · Support): **Accept** on the new-entry card → **Start Preparation** with a time (the card moves to Processing and the ring timer starts; it blinks red when time runs low, “+2 Mins” extends it) → choose a delivery partner **on the processing card** (auto or a named agent) while the order is still being prepared.
+5. Agent → Run → Deliveries: accept the request (countdown, estimate) → heading to pickup → **Confirm pickup is only enabled within 50 m of the workspace** and only once the workspace marks the order prepared → start trip → Complete: customer code, **proof photo from the live camera** (no file picker), cash collected (and UPI proof if not cash).
+6. Workspace → Orders → the order card shows “On the way” → **Track** opens the order view with the live map (agent position, recorded route, distance, ETA) — the same live view stays available under Delivery operations → COD: record the handover → the order shows **Paid** → Costs & statements: approve the earning, mark paid.
 7. Agent → Run → Earnings: statement + CSV, dispute an earning → it shows **Under review** in Costs. Workspaces: request a disconnection while a delivery is active → it completes automatically after the delivery.
 8. Customer → My orders: progress, the 4-digit delivery code and the timeline.
 
-The end-to-end specs run this flow and the integrity rules (oversell, duplicate KYC, private document access, limits, atomic accept, disconnect requests, statements, payment hold, cancellations) against PostgreSQL: `src/modules/orders/orders.e2e.spec.ts` and `src/modules/delivery/delivery.e2e.spec.ts` (37 unit + 40 e2e tests).
+The end-to-end specs run this flow and the integrity rules (oversell, duplicate KYC, private document access, limits, atomic accept, disconnect requests, statements, payment hold, cancellations) against PostgreSQL: `src/modules/orders/orders.e2e.spec.ts` and `src/modules/delivery/delivery.e2e.spec.ts` (41 unit + 46 e2e tests).
 
 ---
 
 ## 5. Not included / pending decisions
 
+- **Service bookings** (the haircut / “Start service” / “Req time change” cards in the Figma set): bookings are a separate pipeline (architecture decision Q-2, products only) and have no API in these modules yet. The order cards are built so a booking card set can reuse `orders/components/cards/parts.tsx`.
+- Customer re-schedule requests on scheduled orders (“Buyer requested for a re-schedule … Accept / Decline”): needs a small request model like the cancel request; not built yet.
 - Payment gateway (manual and COD only, per your choice). `OrderPaymentsService.record()` is the single hook a gateway webhook needs.
 - Mapping provider: maps use Leaflet with configurable tiles; navigation opens Google Maps directions. Route optimisation and precise ETAs wait for the provider decision (guide §7). Displayed travel times are labelled estimates.
 - Statement PDF: statements export as CSV (and a share summary); a PDF layout can be added once branding is agreed.

@@ -2,10 +2,12 @@ import { BadRequestException, ConflictException, Inject, Injectable, NotFoundExc
 import { and, eq } from 'drizzle-orm';
 import type { AuthUser } from '@/core/decorators/current-user.decorator';
 import { DRIZZLE, type DrizzleDB } from '@/infrastructure/database/drizzle.module';
-import { deliveryAgentProfiles, deliveryOffers, orqspaces, type DeliveryTaskStatus } from '@/infrastructure/database/schema';
+import { deliveryConfig } from '@/config/delivery.config';
+import { deliveryAgentProfiles, deliveryOffers, orders, orqspaces, type DeliveryTaskStatus } from '@/infrastructure/database/schema';
 import type { CompleteDeliveryInput, FailDeliveryInput, OfferResponseInput, TaskActionInput } from '../../dto/inputs/task.inputs';
 import type { DeliveryTaskType } from '../../dto/types/delivery-task.type';
 import { assessAgentKyc } from '../../helpers/agent-eligibility';
+import { checkPickupGeofence } from '../../helpers/pickup-geofence';
 import { AgentDirectoryService } from '../agents/agent-directory.service';
 import { CodService } from '../cod/cod.service';
 import { ConnectionsService } from '../connections/connections.service';
@@ -105,8 +107,35 @@ export class AgentTaskActionsService {
     return this.step(user, input, 'ARRIVING_AT_PICKUP');
   }
 
-  confirmPickup(user: AuthUser, input: TaskActionInput) {
-    return this.step(user, input, 'PICKED_UP');
+  /**
+   * Pickup is confirmed only at the pickup point (geofence, default 50 m) and only once the workspace has
+   * marked the order ready — agents may be assigned during preparation and wait at the workspace.
+   */
+  async confirmPickup(user: AuthUser, input: TaskActionInput): Promise<DeliveryTaskType> {
+    const actor = this.agentActor(user);
+    await this.db.transaction(async (tx) => {
+      const task = await this.transitions.lock(tx, input.taskId);
+      if (task.agentUserId !== user.id) throw new NotFoundException('Delivery not found');
+      if (!['ACCEPTED', 'ARRIVING_AT_PICKUP'].includes(task.status)) {
+        throw new ConflictException({ code: 'TASK_STATUS_CHANGED', message: `This delivery is ${task.status.toLowerCase().replace(/_/g, ' ')}` });
+      }
+      const geofence = checkPickupGeofence(
+        { pickupLat: task.pickupLat, pickupLng: task.pickupLng, lat: input.lat, lng: input.lng, accuracyM: input.accuracyM },
+        deliveryConfig.pickupGeofenceMeters,
+        deliveryConfig.pickupGeofenceMaxAccuracyMeters,
+      );
+      if (!geofence.ok) throw new BadRequestException({ code: geofence.code, message: geofence.message, distanceM: geofence.distanceM });
+      const [order] = await tx.select({ status: orders.orderStatus }).from(orders).where(eq(orders.id, task.orderId));
+      if (order?.status === 'PREPARING' || order?.status === 'ACCEPTED') {
+        throw new ConflictException({ code: 'ORDER_NOT_READY', message: 'The workspace is still preparing this order. Wait at the pickup point until it is marked ready' });
+      }
+      await this.transitions.apply(tx, task, 'PICKED_UP', actor, {
+        lat: input.lat,
+        lng: input.lng,
+        metadata: { pickupDistanceM: geofence.distanceM, accuracyM: input.accuracyM ?? null },
+      });
+    });
+    return this.query.getForAgent(user.id, input.taskId);
   }
 
   startTransit(user: AuthUser, input: TaskActionInput) {
@@ -120,6 +149,7 @@ export class AgentTaskActionsService {
       if (task.agentUserId !== user.id) throw new NotFoundException('Delivery not found');
       await this.dispatch.assertProof(task, input.otp, input.codCollectedAmount, input.codMethod);
       await this.files.attach(tx, user.id, 'PROOF_OF_DELIVERY', [input.photoFileId]);
+      await this.files.assertCapturedAfter(tx, input.photoFileId, task.pickedUpAt, 'Take a new photo at the door — the proof photo must be captured during this delivery');
       await this.files.attach(tx, user.id, 'COD_PROOF', [input.codProofFileId]);
       if (input.codCollectedAmount && input.codMethod) {
         await this.cod.recordCollection(tx, task.id, input.codCollectedAmount, input.codMethod, {

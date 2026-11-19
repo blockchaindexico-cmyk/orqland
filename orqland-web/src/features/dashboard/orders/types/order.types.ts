@@ -17,6 +17,9 @@ export type PaymentMethod = 'ONLINE' | 'COD';
 export type PaymentStatus = 'PENDING' | 'PAID' | 'FAILED' | 'REFUND_PENDING' | 'PARTIALLY_REFUNDED' | 'REFUNDED';
 export type FulfilmentMethod = 'SELF_DELIVERY' | 'AGENT_DELIVERY' | 'PICKUP';
 
+/** Tabs on the Orders / Bookings page (server-side filters). */
+export type OrderQueue = 'ALL' | 'NEW' | 'UPCOMING' | 'PROCESSING' | 'ONGOING' | 'COMPLETED' | 'CANCELLED' | 'CANCEL_REQUESTS' | 'SUPPORT';
+
 export interface AddressSnapshot {
   recipientName: string | null;
   recipientPhone: string | null;
@@ -37,10 +40,11 @@ export interface OrderItem {
   sku: string | null;
   imageUrl: string | null;
   quantity: number;
-  unitBasePrice: string;
-  gstPercentage: string;
+  unitBasePrice?: string;
+  gstPercentage?: string;
   unitTotalPrice: string;
   lineTotal: string;
+  stockRemaining: number | null;
 }
 
 export interface OrderHistoryEntry {
@@ -64,6 +68,19 @@ export interface OrderPayment {
   occurredAt: string;
 }
 
+export interface OrderDeliveryAgent {
+  userId: string;
+  orqUserId: string;
+  displayName: string;
+  avatar: string | null;
+  phone: string | null;
+  availability: string;
+  vehicleNumberMasked: string;
+  lastLat: number | null;
+  lastLng: number | null;
+  lastLocationAt: string | null;
+}
+
 export interface OrderDeliverySummary {
   id: string;
   taskNumber: string;
@@ -72,45 +89,85 @@ export interface OrderDeliverySummary {
   needsAttention: boolean;
   attentionReason: string | null;
   codAmount: string;
+  requiresOtp: boolean;
   selfStaffName: string | null;
-  agent: { displayName: string; phone: string | null; vehicleNumberMasked: string } | null;
+  selfStaffPhone: string | null;
+  estimatedDistanceKm: string | null;
+  pickupLat: number | null;
+  pickupLng: number | null;
+  dropoffLat: number | null;
+  dropoffLng: number | null;
+  acceptedAt: string | null;
+  pickedUpAt: string | null;
+  createdAt: string;
+  agent: OrderDeliveryAgent | null;
+  currentOffer: { id: string; agentUserId: string; agentName: string | null; expiresAt: string } | null;
 }
 
-export interface OrderListItem {
+export interface OrderDocument {
+  id: string;
+  mimeType: string;
+  sizeBytes: number;
+  originalName: string | null;
+  createdAt: string;
+}
+
+/** Everything an order card and the order view need. */
+export interface Order {
   id: string;
   orderNumber: string;
+  orqspaceId?: string;
   orderStatus: OrderStatus;
   paymentMethod: PaymentMethod;
   paymentStatus: PaymentStatus;
   requestedFulfilment: 'DELIVERY' | 'PICKUP';
   fulfilmentMethod: FulfilmentMethod | null;
-  totalAmount: string;
-  itemCount: number;
-  buyerSnapshot: { name: string; phone: string | null };
-  items: Pick<OrderItem, 'id' | 'title' | 'variantLabel' | 'quantity'>[];
-  allowedNextStatuses: OrderStatus[];
-  createdAt: string;
-}
-
-export interface OrderDetail extends Omit<OrderListItem, 'items' | 'buyerSnapshot'> {
-  checkoutId: string;
   subtotalBase: string;
   totalGst: string;
   deliveryFee: string;
   discountTotal: string;
-  buyerSnapshot: { name: string; phone: string | null; email: string | null; orqUserId: string };
-  deliveryAddressSnapshot: AddressSnapshot | null;
+  totalAmount: string;
+  itemCount: number;
+  allowedNextStatuses: OrderStatus[];
   customerNote: string | null;
   rejectionReason: string | null;
   cancellationReason: string | null;
+  createdAt: string;
+  acceptedAt: string | null;
+  preparingAt: string | null;
+  readyAt: string | null;
+  dispatchedAt: string | null;
+  deliveredAt: string | null;
+  completedAt: string | null;
+  cancelledAt: string | null;
+  scheduledFor: string | null;
+  preparationMinutes: number | null;
+  preparationDueAt: string | null;
+  cancelRequestStatus: 'REQUESTED' | 'APPROVED' | 'DECLINED' | null;
+  cancelRequestedAt: string | null;
+  cancelRequestReason: string | null;
+  cancelRequestResolution: string | null;
+  returnPickupDate: string | null;
+  returnWindowEndsAt: string | null;
+  /** Successful payments minus refunds. */
+  amountPaid: string;
+  distanceFromPickupKm: number | null;
+  buyerSnapshot: { name: string; phone: string | null; email: string | null; orqUserId: string };
+  deliveryAddressSnapshot: AddressSnapshot | null;
   items: OrderItem[];
+  invoice: OrderDocument | null;
   history: OrderHistoryEntry[];
-  payments: OrderPayment[];
   delivery: OrderDeliverySummary | null;
+  payments?: OrderPayment[];
+  checkoutId?: string;
 }
 
+/** Kept for existing imports. */
+export type OrderDetail = Order;
+export type OrderListItem = Order;
+
 export interface OrderPage {
-  items: OrderListItem[];
+  items: Order[];
   total: number;
   page: number;
   pageSize: number;
@@ -118,6 +175,7 @@ export interface OrderPage {
 
 export interface OrdersFilter {
   orqspaceId: string;
+  queue?: OrderQueue;
   statuses?: OrderStatus[];
   paymentMethod?: PaymentMethod;
   search?: string;
@@ -125,14 +183,23 @@ export interface OrdersFilter {
   pageSize: number;
 }
 
-/** Queue tabs shown on the Order Management page. */
-export const ORDER_QUEUES: { key: string; label: string; statuses: OrderStatus[] | null }[] = [
-  { key: 'new', label: 'New', statuses: ['PLACED'] },
-  { key: 'preparing', label: 'In preparation', statuses: ['ACCEPTED', 'PREPARING'] },
-  { key: 'ready', label: 'Ready', statuses: ['READY_FOR_FULFILMENT', 'AWAITING_CUSTOMER_PICKUP'] },
-  { key: 'out', label: 'Out for delivery', statuses: ['OUT_FOR_DELIVERY'] },
-  { key: 'attention', label: 'Needs action', statuses: ['DELIVERY_FAILED', 'RETURN_REQUESTED'] },
-  { key: 'completed', label: 'Completed', statuses: ['DELIVERED', 'PICKED_UP'] },
-  { key: 'closed', label: 'Closed', statuses: ['REJECTED', 'CANCELLED', 'RETURNED'] },
-  { key: 'all', label: 'All', statuses: null },
+export interface OrderSummary {
+  totalSales: string;
+  totalSalesChangePercent: number | null;
+  ongoingOrders: number;
+  newOrdersToday: number;
+  completedOrders: number;
+  completedChangePercent: number | null;
+  tabs: { queue: OrderQueue; count: number }[];
+}
+
+/** Page tabs, in the order of the design. */
+export const ORDER_TABS: { key: OrderQueue; label: string }[] = [
+  { key: 'ALL', label: 'All' },
+  { key: 'PROCESSING', label: 'Processing' },
+  { key: 'ONGOING', label: 'Ongoing' },
+  { key: 'UPCOMING', label: 'Upcoming' },
+  { key: 'COMPLETED', label: 'Completed' },
+  { key: 'CANCELLED', label: 'Cancelled' },
+  { key: 'SUPPORT', label: 'Support' },
 ];

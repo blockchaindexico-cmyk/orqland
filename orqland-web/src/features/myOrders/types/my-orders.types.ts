@@ -1,6 +1,6 @@
 import type { AddressSnapshot, OrderDetail, OrderListItem } from '@/features/dashboard/orders/types/order.types';
 
-export interface MyOrderListItem extends OrderListItem {
+export interface MyOrderListItem extends Omit<OrderListItem, 'delivery'> {
   orqspaceName: string;
   delivery: { status: string } | null;
 }

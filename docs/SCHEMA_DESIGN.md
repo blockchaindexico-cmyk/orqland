@@ -548,3 +548,26 @@ The approved 22 tables are unchanged. Closing the remaining gaps against the ref
 **Order payment hold (no schema change).** ONLINE orders reserve stock with `order_inventory_reservations.expires_at = placed_at + ORDER_PAYMENT_HOLD_MINUTES` (default 60). A job cancels ONLINE orders still `PLACED` and unpaid after the hold (actor `SYSTEM`, reason recorded), which releases the stock through the normal lifecycle. When an order becomes `PAID`, the expiry is cleared. `PLACED → CANCELLED` is now also allowed for `SYSTEM`.
 
 **Operations metrics (no schema change).** `orqspaceDeliveryOperations` derives queue counts, 7-day medians (time to accept order, to assign, to pick up, to deliver, end to end), SLA attainment against configurable targets (`ORDER_SLA_ACCEPT_MINUTES`, `DELIVERY_SLA_*_MINUTES`), current SLA breaches, agent workload and location freshness, COD outstanding and a 14-day trend from existing tables.
+
+## 12. Order cards round — pending approval (migration `0003_order_cards_prep_cancel_returns.sql`)
+
+The Figma order cards (preparation timer, scheduled orders, customer cancel requests, return pickups, refunds, invoices) need a few **nullable columns on the module's own `orders` table** and one enum value + column on `delivery_files`. No existing ORQLAND table is touched; nothing is dropped.
+
+| Addition | Why | Shape |
+|---|---|---|
+| `orders.scheduled_for` | "Delivery scheduled" / "Pickup scheduled" cards; customers can order for later. | `timestamptz` null. Placement accepts it ≥ 30 min ahead and ≤ `ORDER_MAX_SCHEDULE_DAYS` (14). Empty = as soon as possible. |
+| `orders.preparation_minutes`, `orders.preparation_due_at` | The "ENDS IN" ring timer and the blinking red border when it runs low; "+2 Mins". | `smallint` (check 1–480), `timestamptz`. Set by `startPreparingOrder` (or `acceptOrder` with `startPreparation`); `extendOrderPreparation` moves `preparation_due_at` with one SQL update (`greatest(due, now()) + n minutes`) and writes an audit row. |
+| `orders.cancel_request_status` (+ `cancel_requested_at`, `cancel_request_reason`, `cancel_request_resolution`) | After acceptance the customer can only **ask** to cancel; the workspace approves or declines ("Approve Cancel"). | `varchar(12)` with check `REQUESTED / APPROVED / DECLINED`. Before acceptance (`PLACED`) the customer still cancels directly. Approving cancels through the normal lifecycle (stock released, any delivery cancelled, refund due if paid). |
+| `orders.return_pickup_date` | "Return pickup date" on return requests, then "Confirm Pickup". | `date` null. |
+| `delivery_files.purpose` += `ORDER_INVOICE`, `delivery_files.order_id` | Invoice upload on completed orders (PDF or image), downloadable by the customer and the workspace only. | enum value; nullable `uuid → orders` (`ON DELETE CASCADE`) + index. |
+
+**Derived, no schema change.**
+- *Return window* — `returnWindowEndsAt = completed_at + ORDER_RETURN_WINDOW_HOURS` (48); `requestOrderReturn` is refused after it.
+- *Order queues (page tabs)* — `ALL, NEW, UPCOMING, PROCESSING, ONGOING, COMPLETED, CANCELLED, CANCEL_REQUESTS, SUPPORT`, computed in SQL (`helpers/order-queues.ts`) so counts and lists always agree. `orqspaceOrderSummary` returns the tab counts plus total sales (this month, excluding cancelled/rejected, with % change), ongoing orders, new today and completed this month (% change), on Asia/Kolkata month boundaries.
+- *`amountPaid`* on the order type — successful payments minus refunds (the "Refund due" amount).
+- *`stockRemaining`* per item (limited-stock variants) for the low-stock hint on new orders.
+
+**Delivery rule changes (no schema change).**
+- *Early assignment* — `dispatchOrder` accepts orders in `PREPARING` as well as `READY_FOR_FULFILMENT`, so the agent travels while the order is prepared. Pickup is refused with `ORDER_NOT_READY` until the workspace marks the order prepared; at that moment the assigned agent gets an `ORDER_READY_FOR_PICKUP` notification (new `OrderLifecycleService.onAfterTransition` hook). For own-staff delivery, "Out for delivery" marks a preparing order ready automatically.
+- *Geofenced pickup* — `confirmDeliveryPickup` requires the agent's position within `DELIVERY_PICKUP_GEOFENCE_METERS` (50) of the workspace pickup point, with GPS accuracy ≤ `DELIVERY_PICKUP_GEOFENCE_MAX_ACCURACY_M` (100). Errors: `LOCATION_REQUIRED`, `LOCATION_INACCURATE`, `OUTSIDE_PICKUP_GEOFENCE` ("You are 420 m from the pickup point. Move within 50 m to confirm pickup"). Distance and accuracy are stored on the status event.
+- *Photo-only proof of delivery* — the Run app captures from the live camera (no file picker), and `completeDelivery` rejects a proof photo uploaded before the parcel was picked up.

@@ -66,6 +66,8 @@ export class TaskActionInput {
   @Field(() => ID) @IsUUID() taskId: string;
   @Field({ nullable: true }) @IsOptional() @IsLatitude() lat?: number;
   @Field({ nullable: true }) @IsOptional() @IsLongitude() lng?: number;
+  /** Reported GPS accuracy in metres (used by the pickup geofence). */
+  @Field({ nullable: true }) @IsOptional() @IsNumber() @Min(0) @Max(100000) accuracyM?: number;
 }
 
 @InputType()
