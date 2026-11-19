@@ -8,10 +8,10 @@ Each harness folder also contains **host stand-ins** — files your repos alread
 
 ---
 
-## 1. Copy the new files (223 files)
+## 1. Copy the new files (198 files)
 
 ```bash
-./copy-to-main.sh /path/to/orqland-engine /path/to/orqland-web /path/to/orqland-admin
+./copy-to-main.sh /path/to/orqland-engine /path/to/orqland-web
 ```
 
 The script only adds files. If a file already exists it prints `CONFLICT` and leaves yours alone.
@@ -20,7 +20,6 @@ The script only adds files. If a file already exists it prints `CONFLICT` and le
 |---|---|
 | engine | `src/modules/orders/**`, `src/modules/delivery/**` (including unit + e2e specs); three schema files in `src/infrastructure/database/schema/` — `orders.schema.ts`, `delivery-management.schema.ts`, `delivery-support.schema.ts`; `src/config/{orders,delivery}.config.ts` (all env access); `src/core/utils/{db-executor,gql-enum,money,public-codes,workspace-access}.ts` |
 | web | `src/features/dashboard/{common,orders,delivery}/**` (the Orders page cards live in `orders/components/cards/`), `src/features/orqlandRun/**`, `src/features/myOrders/**`, 4 route pages, `src/styles/ops-theme.css`, `src/styles/order-cards.css`, and nine new primitives in `src/components/ui/` (`status-dot`, `metric`, `timeline`, `table`, `panel`, `underline-tabs`, `form-field`, `map-view`, `bar-chart`) |
-| admin | `src/feature/{deliveryAgents,support}/**`, 4 route files, `src/components/ui/{data-table,status-pill,reason-dialog}.tsx`, `src/utils/format.ts` |
 
 ---
 
@@ -200,26 +199,6 @@ Most of these already exist in your repo; `leaflet` is the only new one. `zustan
 
 ---
 
-## 3A. Admin portal (orqland-admin)
-
-New TanStack Router routes and features, following your `src/feature/<domain>/` and `<Feature>Columns.tsx` conventions:
-
-| Page | Route file | Feature |
-|---|---|---|
-| Delivery agents — KYC review queue + directory | `src/routes/delivery-agents/index.tsx` | `src/feature/deliveryAgents/` (`DeliveryAgentColumns.tsx`) |
-| Agent detail — approve / reject review, suspend / reinstate | `src/routes/delivery-agents/$userId.tsx` | same |
-| Support queue | `src/routes/support/index.tsx` | `src/feature/support/` (`SupportTicketColumns.tsx`) |
-| Ticket — conversation, internal notes, status / priority / team | `src/routes/support/$ticketId.tsx` | same |
-
-- Add **Delivery agents** (`/delivery-agents`) and **Support** (`/support`) to your admin navigation (`__root.tsx` / `layout/`). `routeTree.gen.ts` regenerates automatically.
-- **KYC document viewer** on the agent detail page: licence front/back and RC images load only after the reviewer clicks *Show documents*; the engine serves them only to platform admins and writes `kyc_document.viewed` to `delivery_audit_logs` for every view.
-- Uses `@/lib/graphqlClient` (admin-token client), `@/lib/utils` (`cn`), `@/components/ui/{button,input,textarea,dialog,skeleton}`, and the new `@/components/ui/{data-table,status-pill,reason-dialog}` + `@/utils/format`.
-- **New integration point:** `@/lib/authToken` must export `getAuthorizationHeader()` (from your admin-token exchange) and `ENGINE_ORIGIN`; used only by `feature/deliveryAgents/services/kyc-documents.service.ts`.
-- Add `@tanstack/react-table`, `react-hook-form`, `zod` and `@hookform/resolvers` if they aren't already installed.
-- All admin queries require the `PLATFORM_ADMIN` role (`RolesGuard`). Map it to your admin role name in `PLATFORM_ADMIN_ROLE` (`orqspace-access.service.ts`).
-
----
-
 ## 4. Verify after merging
 
 ```bash
@@ -247,8 +226,7 @@ Then walk through the flow:
 5. Agent → Run → Deliveries: accept the request (countdown, estimate) → heading to pickup → **Confirm pickup is only enabled within 50 m of the workspace** and only once the workspace marks the order prepared → start trip → Complete: customer code, **proof photo from the live camera** (no file picker), cash collected (and UPI proof if not cash).
 6. Workspace → Orders → the order card shows “On the way” → **Track** opens the order view with the live map (agent position, recorded route, distance, ETA) — the same live view stays available under Delivery operations → COD: record the handover → the order shows **Paid** → Costs & statements: approve the earning, mark paid.
 7. Agent → Run → Earnings: statement + CSV, dispute an earning → it shows **Under review** in Costs. Workspaces: request a disconnection while a delivery is active → it completes automatically after the delivery.
-8. Admin → Delivery agents: open a manual-review case → *Show documents* → approve/reject. Admin → Support: reply → the agent sees it in Run → Help.
-9. Customer → My orders: progress, the 4-digit delivery code and the timeline.
+8. Customer → My orders: progress, the 4-digit delivery code and the timeline.
 
 The end-to-end specs run this flow and the integrity rules (oversell, duplicate KYC, private document access, limits, atomic accept, disconnect requests, statements, payment hold, cancellations) against PostgreSQL: `src/modules/orders/orders.e2e.spec.ts` and `src/modules/delivery/delivery.e2e.spec.ts` (41 unit + 46 e2e tests).
 

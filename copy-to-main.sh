@@ -2,13 +2,12 @@
 # Copies ONLY the new Orders & Delivery files into your main repositories.
 # It never overwrites an existing file (prints a CONFLICT line instead) and never edits host files.
 #
-#   ./copy-to-main.sh /path/to/orqland-engine /path/to/orqland-web [/path/to/orqland-admin]
+#   ./copy-to-main.sh /path/to/orqland-engine /path/to/orqland-web
 set -euo pipefail
 
-USAGE="usage: $0 <orqland-engine path> <orqland-web path> [orqland-admin path]"
+USAGE="usage: $0 <orqland-engine path> <orqland-web path>"
 ENGINE_DST="${1:?$USAGE}"
 WEB_DST="${2:?$USAGE}"
-ADMIN_DST="${3:-}"
 HERE="$(cd "$(dirname "$0")" && pwd)"
 
 ENGINE_FILES=(
@@ -45,18 +44,6 @@ WEB_FILES=(
 )
 WEB_DIRS=(src/features/dashboard/common src/features/dashboard/orders src/features/dashboard/delivery src/features/orqlandRun src/features/myOrders)
 
-ADMIN_FILES=(
-  src/components/ui/data-table.tsx
-  src/components/ui/reason-dialog.tsx
-  src/components/ui/status-pill.tsx
-  src/utils/format.ts
-  src/routes/delivery-agents/index.tsx
-  'src/routes/delivery-agents/$userId.tsx'
-  src/routes/support/index.tsx
-  'src/routes/support/$ticketId.tsx'
-)
-ADMIN_DIRS=(src/feature/deliveryAgents src/feature/support)
-
 copied=0; conflicts=0
 copy_one() { # src_root dst_root relative_path
   local src="$1/$3" dst="$2/$3"
@@ -71,10 +58,6 @@ for f in "${ENGINE_FILES[@]}"; do copy_one "$HERE/orqland-engine" "$ENGINE_DST" 
 for d in "${ENGINE_DIRS[@]}"; do copy_tree "$HERE/orqland-engine" "$ENGINE_DST" "$d"; done
 for f in "${WEB_FILES[@]}"; do copy_one "$HERE/orqland-web" "$WEB_DST" "$f"; done
 for d in "${WEB_DIRS[@]}"; do copy_tree "$HERE/orqland-web" "$WEB_DST" "$d"; done
-if [[ -n "$ADMIN_DST" ]]; then
-  for f in "${ADMIN_FILES[@]}"; do copy_one "$HERE/orqland-admin" "$ADMIN_DST" "$f"; done
-  for d in "${ADMIN_DIRS[@]}"; do copy_tree "$HERE/orqland-admin" "$ADMIN_DST" "$d"; done
-fi
 
 echo
 echo "Copied $copied file(s); $conflicts conflict(s)."
