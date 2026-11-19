@@ -57,7 +57,7 @@ Expected/collected/method/proof/settled/outstanding/discrepancy, order paid only
 Approved km × snapshotted rate, distance source, no duplicates, audited adjustments, statements DRAFT → FINAL at month end (catches up missed months), payout tracked separately — `earnings.service.ts`, `statements.service.ts` · screenshot 07.
 
 ## §10 Permissions
-Workspace admins never see KYC documents (403); only platform admins, and each view is audited (`kyc_document.viewed`) — `delivery-files.service.ts`, admin viewer · screenshot 29.
+Workspace admins never see KYC documents (403); only platform admins, and each view is audited (`kyc_document.viewed`) — `delivery-files.service.ts`.
 
 ## §11 UI direction
 Neutral `ops-theme` (black/white/neutral), status dot + label everywhere, compact tables and metric strips, map-focused live views, timeline details, phone-first Run app with ≥52px actions, labelled form errors (`FormField`, `ErrorNote`). Overview with time-to-accept / assign / pickup / deliver medians and SLA attainment (Runframe-style MTTA/MTTR analytics) · screenshot 01.
