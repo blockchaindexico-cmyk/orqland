@@ -63,6 +63,12 @@ export class OrderPlacementService {
     if (input.requestedFulfilment === 'DELIVERY' && !input.addressId) {
       throw new BadRequestException('A delivery address is required');
     }
+    const scheduledFor = input.scheduledFor ? new Date(input.scheduledFor) : null;
+    if (scheduledFor) {
+      const minutesAhead = (scheduledFor.getTime() - Date.now()) / 60_000;
+      if (minutesAhead < 30) throw new BadRequestException('Choose a time at least 30 minutes from now, or order for as soon as possible');
+      if (minutesAhead > ordersConfig.maxScheduleDays * 24 * 60) throw new BadRequestException(`Orders can be scheduled up to ${ordersConfig.maxScheduleDays} days ahead`);
+    }
 
     const [buyer] = await this.db.select().from(orqUsers).where(eq(orqUsers.id, user.id));
     if (!buyer) throw new NotFoundException('User not found');
@@ -109,6 +115,7 @@ export class OrderPlacementService {
               deliveryAddressSnapshot: address?.snapshot ?? null,
               sourceAddressId: address?.id ?? null,
               customerNote: input.customerNote ?? null,
+              scheduledFor,
               idempotencyKey: input.idempotencyKey,
             })
             .returning();

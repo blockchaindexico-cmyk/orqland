@@ -1,6 +1,6 @@
 import { ENGINE_ORIGIN, getAuthorizationHeader } from '@/lib/authToken';
 
-export type DeliveryFilePurpose = 'LICENCE_FRONT' | 'LICENCE_BACK' | 'VEHICLE_RC' | 'PROOF_OF_DELIVERY' | 'COD_PROOF' | 'SUPPORT_ATTACHMENT';
+export type DeliveryFilePurpose = 'LICENCE_FRONT' | 'LICENCE_BACK' | 'VEHICLE_RC' | 'PROOF_OF_DELIVERY' | 'COD_PROOF' | 'SUPPORT_ATTACHMENT' | 'ORDER_INVOICE';
 
 export interface UploadedDeliveryFile {
   id: string;

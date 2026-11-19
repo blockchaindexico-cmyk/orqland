@@ -1,4 +1,4 @@
-import { Field, ID, Int, ObjectType } from '@nestjs/graphql';
+import { Field, Float, ID, Int, ObjectType } from '@nestjs/graphql';
 import type {
   ActorRole,
   OrderFulfilmentMethod,
@@ -60,6 +60,8 @@ export class OrderItemType {
   @Field() unitGst: string;
   @Field() unitTotalPrice: string;
   @Field() lineTotal: string;
+  /** Remaining stock of the ordered variant (LIMITED inventory only), shown on new-order cards. */
+  @Field(() => Int, { nullable: true }) stockRemaining?: number | null;
 }
 
 @ObjectType('OrderStatusHistoryEntry')
@@ -117,6 +119,22 @@ export class OrderType {
   @Field(() => Date, { nullable: true }) deliveredAt: Date | null;
   @Field(() => Date, { nullable: true }) completedAt: Date | null;
   @Field(() => Date, { nullable: true }) cancelledAt: Date | null;
+  /** Customer-requested delivery / pickup time (null = as soon as possible). */
+  @Field(() => Date, { nullable: true }) scheduledFor: Date | null;
+  /** Preparation timer: minutes set by the workspace and the current deadline ("ENDS IN"). */
+  @Field(() => Int, { nullable: true }) preparationMinutes: number | null;
+  @Field(() => Date, { nullable: true }) preparationDueAt: Date | null;
+  /** REQUESTED | APPROVED | DECLINED — customer cancellation request after acceptance. */
+  @Field(() => String, { nullable: true }) cancelRequestStatus: string | null;
+  @Field(() => Date, { nullable: true }) cancelRequestedAt: Date | null;
+  @Field(() => String, { nullable: true }) cancelRequestReason: string | null;
+  @Field(() => String, { nullable: true }) cancelRequestResolution: string | null;
+  /** Agreed pickup date for a requested return (YYYY-MM-DD). */
+  @Field(() => String, { nullable: true }) returnPickupDate: string | null;
+  /** Returns can be requested until this time (null = no limit / not delivered yet). */
+  @Field(() => Date, { nullable: true }) returnWindowEndsAt?: Date | null;
+  /** Successful payments minus refunds — what a refund would return. */
+  @Field({ nullable: true }) amountPaid?: string;
   @Field(() => Int) version: number;
   @Field() createdAt: Date;
   @Field() updatedAt: Date;
@@ -153,4 +171,23 @@ export class CheckoutAddressType extends AddressSnapshotType {
   @Field(() => ID) id: string;
   @Field() addressType: string;
   @Field() isPrimary: boolean;
+}
+
+@ObjectType('OrderQueueCount')
+export class OrderQueueCountType {
+  /** ALL | NEW | UPCOMING | PROCESSING | ONGOING | COMPLETED | CANCELLED | SUPPORT */
+  @Field() queue: string;
+  @Field(() => Int) count: number;
+}
+
+/** Summary cards (this calendar month, Asia/Kolkata) and tab counts. */
+@ObjectType('OrderSummary')
+export class OrderSummaryType {
+  @Field() totalSales: string;
+  @Field(() => Float, { nullable: true }) totalSalesChangePercent: number | null;
+  @Field(() => Int) ongoingOrders: number;
+  @Field(() => Int) newOrdersToday: number;
+  @Field(() => Int) completedOrders: number;
+  @Field(() => Float, { nullable: true }) completedChangePercent: number | null;
+  @Field(() => [OrderQueueCountType]) tabs: OrderQueueCountType[];
 }

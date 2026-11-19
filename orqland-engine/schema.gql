@@ -2,6 +2,13 @@
 # THIS FILE WAS AUTOMATICALLY GENERATED (DO NOT MODIFY)
 # ------------------------------------------------------
 
+input AcceptOrderInput {
+  note: String
+  orderId: ID!
+  preparationMinutes: Int
+  startPreparation: Boolean = false
+}
+
 enum ActorRole {
   AGENT
   CUSTOMER
@@ -176,6 +183,11 @@ input ApproveEarningInput {
   approvedBillableKm: String
   earningId: ID!
   reason: String
+}
+
+input ApproveRefundInput {
+  orderId: ID!
+  providerReference: String
 }
 
 enum AssignmentStrategy {
@@ -627,6 +639,11 @@ input EarningsFilterInput {
   statuses: [EarningStatus!]
 }
 
+input ExtendPreparationInput {
+  minutes: Int
+  orderId: ID!
+}
+
 input FailDeliveryInput {
   lat: Float
   lng: Float
@@ -717,9 +734,12 @@ input MarkOrderReturnedInput {
 
 type Mutation {
   acceptDeliveryOffer(input: OfferResponseInput!): DeliveryTask!
-  acceptOrder(input: OrderActionInput!): Order!
+  acceptOrder(input: AcceptOrderInput!): Order!
   adjustDeliveryEarning(input: AdjustEarningInput!): DeliveryEarning!
   approveDeliveryEarning(input: ApproveEarningInput!): DeliveryEarning!
+  approveOrderCancellation(input: OrderActionInput!): Order!
+  approveOrderRefund(input: ApproveRefundInput!): Order!
+  attachOrderInvoice(fileId: ID!, orderId: ID!): OrderDocument!
   cancelDeliveryAgentInvite(input: ConnectionReasonInput!): AgentConnection!
   cancelDeliveryTask(input: TaskReasonInput!): DeliveryTask!
   cancelMyOrder(input: OrderReasonInput!): Order!
@@ -732,10 +752,12 @@ type Mutation {
   createSupportTicket(input: CreateSupportTicketInput!): SupportTicket!
   decideDeliveryAgentReview(input: AdminReviewDecisionInput!): DeliveryAgentProfile!
   declineDeliveryOffer(input: OfferResponseInput!): Boolean!
+  declineOrderCancellation(input: OrderReasonInput!): Order!
   declineOrderReturn(input: OrderReasonInput!): Order!
   disconnectDeliveryAgent(input: ConnectionReasonInput!): AgentConnection!
   disconnectFromWorkspace(input: ConnectionReasonInput!): AgentConnection!
   dispatchOrder(input: DispatchOrderInput!): DeliveryTask!
+  extendOrderPreparation(input: ExtendPreparationInput!): Order!
   failDelivery(input: FailDeliveryInput!): DeliveryTask!
   inviteDeliveryAgent(input: InviteDeliveryAgentInput!): AgentConnection!
   markArrivingAtPickup(input: TaskActionInput!): DeliveryTask!
@@ -761,10 +783,11 @@ type Mutation {
   respondToDeliveryInvitation(input: RespondToInvitationInput!): AgentConnection!
   returnDeliveryToOrigin(input: TaskActionInput!): DeliveryTask!
   reverifyMyDeliveryKyc(input: ReverifyKycInput!): DeliveryAgentProfile!
+  scheduleOrderReturnPickup(input: ScheduleReturnPickupInput!): Order!
   setMyAvailability(availability: AgentAvailabilityChoice!): DeliveryAgentProfile!
   setNotificationPreference(enabled: Boolean!, type: String!): [NotificationPreference!]!
   startDeliveryTransit(input: TaskActionInput!): DeliveryTask!
-  startPreparingOrder(input: OrderActionInput!): Order!
+  startPreparingOrder(input: StartPreparationInput!): Order!
   suspendDeliveryAgent(input: AdminAgentActionInput!): DeliveryAgentProfile!
   updateDeliveryAgentRate(input: UpdateConnectionRateInput!): AgentConnection!
   updateOrqspaceDeliverySettings(input: UpdateDeliverySettingsInput!): OrqspaceDeliverySettings!
@@ -858,7 +881,12 @@ type OperationsTrendPoint {
 type Order {
   acceptedAt: DateTime
   allowedNextStatuses: [OrderStatus!]!
+  amountPaid: String
   buyerSnapshot: BuyerSnapshot!
+  cancelRequestReason: String
+  cancelRequestResolution: String
+  cancelRequestStatus: String
+  cancelRequestedAt: DateTime
   cancellationReason: String
   cancelledAt: DateTime
   cancelledByRole: ActorRole
@@ -875,9 +903,11 @@ type Order {
   deliveryOtp: String
   discountTotal: String!
   dispatchedAt: DateTime
+  distanceFromPickupKm: Float
   fulfilmentMethod: OrderFulfilmentMethod
   history: [OrderStatusHistoryEntry!]!
   id: ID!
+  invoice: OrderDocument
   itemCount: Int!
   items: [OrderItem!]!
   orderNumber: String!
@@ -887,10 +917,15 @@ type Order {
   paymentMethod: OrderPaymentMethod!
   paymentStatus: OrderPaymentStatus!
   payments: [OrderPayment!]!
+  preparationDueAt: DateTime
+  preparationMinutes: Int
   preparingAt: DateTime
   readyAt: DateTime
   rejectionReason: String
   requestedFulfilment: OrderRequestedFulfilment!
+  returnPickupDate: String
+  returnWindowEndsAt: DateTime
+  scheduledFor: DateTime
   subtotalBase: String!
   totalAmount: String!
   totalGst: String!
@@ -901,6 +936,14 @@ type Order {
 input OrderActionInput {
   note: String
   orderId: ID!
+}
+
+type OrderDocument {
+  createdAt: DateTime!
+  id: ID!
+  mimeType: String!
+  originalName: String
+  sizeBytes: Int!
 }
 
 enum OrderFulfilmentMethod {
@@ -918,6 +961,7 @@ type OrderItem {
   listingType: String!
   quantity: Int!
   sku: String
+  stockRemaining: Int
   title: String!
   unitBasePrice: String!
   unitGst: String!
@@ -971,6 +1015,23 @@ enum OrderPaymentStatus {
   REFUND_PENDING
 }
 
+enum OrderQueue {
+  ALL
+  CANCELLED
+  CANCEL_REQUESTS
+  COMPLETED
+  NEW
+  ONGOING
+  PROCESSING
+  SUPPORT
+  UPCOMING
+}
+
+type OrderQueueCount {
+  count: Int!
+  queue: String!
+}
+
 input OrderReasonInput {
   orderId: ID!
   reason: String!
@@ -1012,6 +1073,16 @@ type OrderStatusHistoryEntry {
   toStatus: OrderStatus!
 }
 
+type OrderSummary {
+  completedChangePercent: Float
+  completedOrders: Int!
+  newOrdersToday: Int!
+  ongoingOrders: Int!
+  tabs: [OrderQueueCount!]!
+  totalSales: String!
+  totalSalesChangePercent: Float
+}
+
 type OrqspaceDeliverySettings {
   activeAgentCount: Int!
   agentLimit: Int!
@@ -1035,6 +1106,7 @@ input OrqspaceOrdersFilterInput {
   page: Int! = 1
   pageSize: Int! = 20
   paymentMethod: OrderPaymentMethod
+  queue: OrderQueue
   search: String
   statuses: [OrderStatus!]
 }
@@ -1059,6 +1131,7 @@ input PlaceOrderInput {
   items: [PlaceOrderItemInput!]!
   paymentMethod: OrderPaymentMethod!
   requestedFulfilment: OrderRequestedFulfilment!
+  scheduledFor: String
 }
 
 input PlaceOrderItemInput {
@@ -1134,6 +1207,7 @@ type Query {
   orqspaceLiveDeliveries(orqspaceId: ID!): [DeliveryTask!]!
   orqspaceOrder(orderId: ID!): Order!
   orqspaceOrderCounts(orqspaceId: ID!): [OrderStatusCount!]!
+  orqspaceOrderSummary(orqspaceId: ID!): OrderSummary!
   orqspaceOrders(filter: OrqspaceOrdersFilterInput!): OrderPage!
   platformDeliveryAgent(userId: ID!): PlatformDeliveryAgent!
   platformDeliveryAgents(filter: PlatformAgentsFilterInput!): PlatformDeliveryAgentPage!
@@ -1213,6 +1287,11 @@ type RunHome {
   unreadNotifications: Int!
 }
 
+input ScheduleReturnPickupInput {
+  orderId: ID!
+  pickupDate: String!
+}
+
 input SearchDeliveryAgentInput {
   orqUserId: String!
   orqspaceId: ID!
@@ -1236,6 +1315,12 @@ type SlaBreach {
   stage: String!
   targetMinutes: Int!
   taskId: ID
+}
+
+input StartPreparationInput {
+  note: String
+  orderId: ID!
+  preparationMinutes: Int
 }
 
 type SupportMessage {
@@ -1314,6 +1399,7 @@ input SupportTicketsFilterInput {
 }
 
 input TaskActionInput {
+  accuracyM: Float
   lat: Float
   lng: Float
   taskId: ID!

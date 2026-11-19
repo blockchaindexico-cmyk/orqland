@@ -1,5 +1,5 @@
 import { BadRequestException, ForbiddenException, Inject, Injectable, Logger, NotFoundException, PayloadTooLargeException } from '@nestjs/common';
-import { and, eq, inArray, isNull, lt, sql } from 'drizzle-orm';
+import { and, desc, eq, inArray, isNull, lt, sql } from 'drizzle-orm';
 import { createHash, randomUUID } from 'crypto';
 import type { AuthUser } from '@/core/decorators/current-user.decorator';
 import type { DbExecutor } from '@/core/utils/db-executor';
@@ -12,6 +12,7 @@ import {
   deliverySupportMessages,
   deliverySupportTickets,
   deliveryTasks,
+  orders,
   type DeliveryFilePurpose,
 } from '@/infrastructure/database/schema';
 import { AuditService } from '@/modules/orders/services/shared/audit.service';
@@ -36,6 +37,7 @@ const ALLOWED_TYPES: Record<DeliveryFilePurpose, string[]> = {
   PROOF_OF_DELIVERY: IMAGE_TYPES,
   COD_PROOF: IMAGE_TYPES,
   SUPPORT_ATTACHMENT: [...IMAGE_TYPES, 'application/pdf'],
+  ORDER_INVOICE: [...IMAGE_TYPES, 'application/pdf'],
 };
 const KYC_PURPOSES: DeliveryFilePurpose[] = ['LICENCE_FRONT', 'LICENCE_BACK', 'VEHICLE_RC'];
 
@@ -118,6 +120,39 @@ export class DeliveryFilesService {
     await exec.update(deliveryFiles).set({ attachedAt: new Date() }).where(inArray(deliveryFiles.id, ids));
   }
 
+  /**
+   * Attaches an uploaded invoice (purpose ORDER_INVOICE) to an order of the caller's workspace.
+   * The newest invoice wins; older ones stay on record.
+   */
+  async attachOrderInvoice(user: AuthUser, orderId: string, fileId: string): Promise<DeliveryFileRow> {
+    const [order] = await this.db.select({ orqspaceId: orders.orqspaceId, status: orders.orderStatus }).from(orders).where(eq(orders.id, orderId));
+    if (!order) throw new NotFoundException('Order not found');
+    if (!(await assertWorkspaceAccess(order.orqspaceId, user.id, this.db))) throw new ForbiddenException('You do not manage this workspace');
+    return this.db.transaction(async (tx) => {
+      await this.attach(tx, user.id, 'ORDER_INVOICE', [fileId]);
+      const [row] = await tx.update(deliveryFiles).set({ orderId }).where(eq(deliveryFiles.id, fileId)).returning();
+      await this.audit.record(tx, { entityType: 'order', entityId: orderId, action: 'order.invoice_attached', actorUserId: user.id, actorRole: 'WORKSPACE', after: { fileId } });
+      return row;
+    });
+  }
+
+  async latestInvoice(orderId: string): Promise<DeliveryFileRow | null> {
+    const [row] = await this.db
+      .select()
+      .from(deliveryFiles)
+      .where(and(eq(deliveryFiles.orderId, orderId), eq(deliveryFiles.purpose, 'ORDER_INVOICE'), isNull(deliveryFiles.deletedAt)))
+      .orderBy(desc(deliveryFiles.createdAt))
+      .limit(1);
+    return row ?? null;
+  }
+
+  /** Proof photos must be taken during the delivery (not an older picture from the gallery). */
+  async assertCapturedAfter(exec: DbExecutor, fileId: string | null | undefined, after: Date | null, message: string): Promise<void> {
+    if (!fileId || !after) return;
+    const [row] = await exec.select({ createdAt: deliveryFiles.createdAt }).from(deliveryFiles).where(eq(deliveryFiles.id, fileId));
+    if (row && row.createdAt < after) throw new BadRequestException(message);
+  }
+
   /** Returns metadata and bytes after checking the viewer may see the file. */
   async read(user: AuthUser, fileId: string): Promise<{ file: DeliveryFileRow; data: Buffer }> {
     const [file] = await this.db.select().from(deliveryFiles).where(eq(deliveryFiles.id, fileId));
@@ -152,6 +187,12 @@ export class DeliveryFilesService {
       return ticket?.raisedBy === user.id;
     }
     if (isPlatform) return true;
+    if (file.purpose === 'ORDER_INVOICE') {
+      if (!file.orderId) return false;
+      const [order] = await this.db.select({ customerId: orders.customerId, orqspaceId: orders.orqspaceId }).from(orders).where(eq(orders.id, file.orderId));
+      if (!order) return false;
+      return order.customerId === user.id || (await assertWorkspaceAccess(order.orqspaceId, user.id, this.db));
+    }
     // Proof of delivery and COD proof: the workspace that owns the delivery.
     const orqspaceId = await this.orqspaceForProof(file);
     return !!orqspaceId && (await assertWorkspaceAccess(orqspaceId, user.id, this.db));
@@ -197,5 +238,6 @@ export function purposeLabel(purpose: DeliveryFilePurpose): string {
     PROOF_OF_DELIVERY: 'proof-of-delivery photo',
     COD_PROOF: 'payment proof',
     SUPPORT_ATTACHMENT: 'attachment',
+    ORDER_INVOICE: 'invoice',
   }[purpose];
 }

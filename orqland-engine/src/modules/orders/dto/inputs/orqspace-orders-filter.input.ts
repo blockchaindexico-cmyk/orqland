@@ -1,7 +1,8 @@
 import { Field, ID, InputType, Int } from '@nestjs/graphql';
 import { IsArray, IsIn, IsInt, IsOptional, IsString, IsUUID, Max, MaxLength, Min } from 'class-validator';
 import type { OrderPaymentMethod, OrderStatus } from '@/infrastructure/database/schema';
-import { OrderPaymentMethodGql, OrderStatusGql } from '../enums/order.enums';
+import { ORDER_QUEUES, type OrderQueue } from '../../helpers/order-queues';
+import { OrderPaymentMethodGql, OrderQueueGql, OrderStatusGql } from '../enums/order.enums';
 
 @InputType()
 export class OrqspaceOrdersFilterInput {
@@ -12,6 +13,12 @@ export class OrqspaceOrdersFilterInput {
   @IsArray()
   @IsIn(Object.keys(OrderStatusGql), { each: true })
   statuses?: OrderStatus[];
+
+  /** Page tab; combined with `statuses` when both are given. */
+  @Field(() => OrderQueueGql, { nullable: true })
+  @IsOptional()
+  @IsIn(ORDER_QUEUES)
+  queue?: OrderQueue;
 
   @Field(() => OrderPaymentMethodGql, { nullable: true })
   @IsOptional()

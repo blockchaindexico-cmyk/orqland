@@ -14,11 +14,13 @@ import { ErrorNote } from '@/components/ui/panel';
 import { Sheet, SheetContent, SheetDescription, SheetTitle } from '@/components/ui/sheet';
 import { StatusDot } from '@/components/ui/status-dot';
 import { formatAddress, formatKm, formatMoney } from '@/features/dashboard/common/utils/format';
+import { haversineKm } from '@/features/dashboard/common/utils/geo';
 import { gqlErrorMessage } from '@/features/dashboard/common/utils/gqlError';
 import { metaOf, TASK_STATUS } from '@/features/dashboard/common/utils/status';
 import type { DeliveryTask } from '@/features/dashboard/delivery/types/delivery.types';
 import type { Tracking } from '../hooks/useLocationTracking';
 import { useRunAction, useRunTrace } from '../hooks/useRun';
+import { CameraCapture } from './CameraCapture';
 import { BigAction, Fact, OtpInput, PhotoCapture, RunCard, StepTracker } from './RunPrimitives';
 
 export const STEPS = [
@@ -37,6 +39,28 @@ export const NEXT_STEP: Record<string, { label: string; action: StepAction; hint
   IN_TRANSIT: { label: 'Complete delivery', action: 'complete', hint: 'Get the customer’s 4-digit code and collect payment if due.' },
 };
 
+/** Mirrors DELIVERY_PICKUP_GEOFENCE_METERS / DELIVERY_PICKUP_GEOFENCE_MAX_ACCURACY_M on the engine. */
+export const PICKUP_GEOFENCE_M = 50;
+export const PICKUP_MAX_ACCURACY_M = 100;
+
+/** Whether the agent may confirm pickup here: within 50 m of the pickup point with a usable GPS fix. */
+export function pickupGate(t: DeliveryTask, tracking: Tracking): { ok: boolean; distanceM: number | null; message: string } {
+  if (t.pickupLat === null || t.pickupLng === null) return { ok: true, distanceM: null, message: 'Check the order number with the workspace before you leave.' };
+  if (!tracking.position) {
+    return {
+      ok: false,
+      distanceM: null,
+      message: tracking.state === 'denied' ? 'Turn on location for Orqland Run — pickup can only be confirmed at the workspace.' : 'Getting your location… pickup can only be confirmed at the workspace.',
+    };
+  }
+  const distanceM = Math.round(haversineKm(tracking.position, { lat: t.pickupLat, lng: t.pickupLng }) * 1000);
+  if (tracking.position.accuracy !== null && tracking.position.accuracy > PICKUP_MAX_ACCURACY_M) {
+    return { ok: false, distanceM, message: `GPS is too weak (±${Math.round(tracking.position.accuracy)} m). Step outside or wait a moment.` };
+  }
+  if (distanceM > PICKUP_GEOFENCE_M) return { ok: false, distanceM, message: `You are ${distanceM} m from the pickup point. Move within ${PICKUP_GEOFENCE_M} m to confirm pickup.` };
+  return { ok: true, distanceM, message: 'You’re at the pickup point. Check the order number with the workspace before you leave.' };
+}
+
 const mapsLink = (lat: number | null, lng: number | null) => (lat !== null && lng !== null ? `https://www.google.com/maps/dir/?api=1&destination=${lat},${lng}&travelmode=driving` : null);
 
 /** Pickup & drop-off workflow for the accepted job: map, progress, contacts, COD and the one next action. */
@@ -51,6 +75,8 @@ export function ActiveJob({ task: t, tracking, onFinished }: { task: DeliveryTas
   const st = metaOf(TASK_STATUS, t.status);
   const beforePickup = ['ACCEPTED', 'ARRIVING_AT_PICKUP'].includes(t.status);
   const here = tracking.position ? { lat: Number(tracking.position.lat.toFixed(6)), lng: Number(tracking.position.lng.toFixed(6)) } : {};
+  const accuracy = tracking.position?.accuracy;
+  const gate = next?.action === 'confirmPickup' ? pickupGate(t, tracking) : null;
   const pending = markArriving.isPending || confirmPickup.isPending || startTransit.isPending;
   const error = markArriving.error ?? confirmPickup.error ?? startTransit.error;
 
@@ -64,7 +90,7 @@ export function ActiveJob({ task: t, tracking, onFinished }: { task: DeliveryTas
     if (!next) return;
     if (next.action === 'complete') return setCompleting(true);
     const m = next.action === 'markArriving' ? markArriving : next.action === 'confirmPickup' ? confirmPickup : startTransit;
-    m.mutate({ taskId: t.id, ...here });
+    m.mutate({ taskId: t.id, ...here, ...(accuracy !== null && accuracy !== undefined ? { accuracyM: Math.round(accuracy) } : {}) });
   };
 
   return (
@@ -137,10 +163,19 @@ export function ActiveJob({ task: t, tracking, onFinished }: { task: DeliveryTas
       {error && <ErrorNote message={gqlErrorMessage(error)} />}
       {next && (
         <div className="space-y-1.5">
-          <BigAction disabled={pending} onClick={runNext}>
+          {gate && (
+            <p
+              role="status"
+              className={`flex items-center justify-between gap-3 rounded-xl px-3 py-2.5 text-[13px] ${gate.ok ? 'bg-muted' : 'border-2 border-foreground font-medium'}`}
+            >
+              <span>{gate.message}</span>
+              {gate.distanceM !== null && <span className="tabular shrink-0 rounded-full bg-foreground px-2.5 py-1 text-[12px] font-semibold text-background">{gate.distanceM} m</span>}
+            </p>
+          )}
+          <BigAction disabled={pending || (gate !== null && !gate.ok)} onClick={runNext}>
             {pending ? 'Updating…' : next.label}
           </BigAction>
-          <p className="text-center text-[12px] text-muted-foreground">{next.hint}</p>
+          {!gate && <p className="text-center text-[12px] text-muted-foreground">{next.hint}</p>}
         </div>
       )}
       {t.status === 'PICKED_UP' && (
@@ -286,7 +321,9 @@ function CompleteDeliverySheet({ task: t, here, onClose }: { task: DeliveryTask;
             <Controller
               control={form.control}
               name="photo"
-              render={({ field }) => <PhotoCapture purpose="PROOF_OF_DELIVERY" label="Proof-of-delivery photo" optional hint="Parcel at the door or with the customer" value={field.value} onChange={field.onChange} />}
+              render={({ field }) => (
+                <CameraCapture purpose="PROOF_OF_DELIVERY" label="Proof-of-delivery photo" optional hint="Photo of the parcel at the door or with the customer" value={field.value} onChange={field.onChange} />
+              )}
             />
             <FormField id="recipientName" label="Received by" optional={t.requiresOtp} error={e.recipientName?.message}>
               <Input className="h-11" autoComplete="off" {...form.register('recipientName')} />

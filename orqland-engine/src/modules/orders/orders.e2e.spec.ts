@@ -10,6 +10,7 @@
 import {
   advanceToReady,
   call,
+  downloadFile,
   gql,
   gqlError,
   PLACE_ORDER,
@@ -17,6 +18,7 @@ import {
   sqlQuery,
   startE2eApp,
   stopE2eApp,
+  uploadFile,
   variantStock,
 } from './testing/e2e-harness';
 
@@ -97,7 +99,7 @@ describe('Order lifecycle', () => {
     const cancelled = (await place('orders-e2e-cancel', [{ listingId: SEED.listingSimple, quantity: 2 }])).data.placeOrder.orders[0];
     await gql(SEED.customer, `mutation($i: OrderReasonInput!) { cancelMyOrder(input: $i) { orderStatus } }`, { i: { orderId: cancelled.id, reason: 'Changed my mind' } });
     expect(await variantStock(SEED.variantSimpleDefault)).toBe(before);
-    expect(await gqlError(SEED.customer, `mutation($i: OrderReasonInput!) { cancelMyOrder(input: $i) { orderStatus } }`, { i: { orderId: cancelled.id, reason: 'again' } })).toMatch(/Cannot move order/);
+    expect(await gqlError(SEED.customer, `mutation($i: OrderReasonInput!) { cancelMyOrder(input: $i) { orderStatus } }`, { i: { orderId: cancelled.id, reason: 'again' } })).toMatch(/can no longer be cancelled/);
   });
 
   it('runs customer pickup with a recorded online payment', async () => {
@@ -141,5 +143,119 @@ describe('Order lifecycle', () => {
       i: { orderId: order.id, kind: 'REFUND', method: 'ONLINE', amount: '504.00', providerReference: 'UPI-RF-2' },
     });
     expect(refunded.recordOrderPayment.paymentStatus).toBe('REFUNDED');
+  });
+});
+
+describe('Order cards: preparation timer, tabs, cancel requests, returns, refunds, invoices', () => {
+  const CARD = `query($id: ID!) { orqspaceOrder(orderId: $id) { orderStatus paymentStatus preparationMinutes preparationDueAt cancelRequestStatus cancelRequestReason returnPickupDate scheduledFor items { stockRemaining } invoice { id mimeType } } }`;
+  const queueIds = async (queue: string) =>
+    (await gql(SEED.owner, `query($f: OrqspaceOrdersFilterInput!) { orqspaceOrders(filter: $f) { items { id } } }`, { f: { orqspaceId: SEED.orqspace, queue } })).orqspaceOrders.items.map(
+      (o: { id: string }) => o.id,
+    );
+  const mutate = (user: string, name: string, type: string, input: Record<string, unknown>, fields = 'orderStatus') =>
+    gql(user, `mutation($i: ${type}!) { ${name}(input: $i) { ${fields} } }`, { i: input });
+
+  it('"Accept & Start Prep" starts the timer; "+2 Mins" extends it; tabs and summary follow the order', async () => {
+    const order = (await place('orders-e2e-card-prep', [{ listingId: SEED.listingSimple, quantity: 1 }])).data.placeOrder.orders[0];
+    expect(await queueIds('NEW')).toContain(order.id);
+    expect(await queueIds('UPCOMING')).toContain(order.id);
+    const accepted = (await mutate(SEED.owner, 'acceptOrder', 'AcceptOrderInput', { orderId: order.id, startPreparation: true, preparationMinutes: 15 }, 'orderStatus preparationMinutes preparationDueAt')).acceptOrder;
+    expect(accepted).toMatchObject({ orderStatus: 'PREPARING', preparationMinutes: 15 });
+    const due = new Date(accepted.preparationDueAt).getTime();
+    expect(Math.abs(due - (Date.now() + 15 * 60_000))).toBeLessThan(5_000);
+
+    const extended = (await mutate(SEED.owner, 'extendOrderPreparation', 'ExtendPreparationInput', { orderId: order.id }, 'preparationMinutes preparationDueAt')).extendOrderPreparation;
+    expect(extended.preparationMinutes).toBe(17);
+    expect(new Date(extended.preparationDueAt).getTime() - due).toBe(2 * 60_000);
+    expect(await queueIds('PROCESSING')).toContain(order.id);
+    expect(await queueIds('UPCOMING')).not.toContain(order.id);
+
+    const summary = (
+      await gql(SEED.owner, `query($id: ID!) { orqspaceOrderSummary(orqspaceId: $id) { totalSales ongoingOrders completedOrders tabs { queue count } } }`, { id: SEED.orqspace })
+    ).orqspaceOrderSummary;
+    expect(Number(summary.totalSales)).toBeGreaterThan(0);
+    expect(summary.ongoingOrders).toBeGreaterThanOrEqual(1);
+    expect(summary.tabs.map((t: { queue: string }) => t.queue)).toEqual(['ALL', 'NEW', 'UPCOMING', 'PROCESSING', 'ONGOING', 'COMPLETED', 'CANCELLED', 'CANCEL_REQUESTS', 'SUPPORT']);
+    expect(summary.tabs.find((t: { queue: string }) => t.queue === 'PROCESSING').count).toBeGreaterThanOrEqual(1);
+    expect((await gql(SEED.owner, CARD, { id: order.id })).orqspaceOrder.items[0].stockRemaining).toBeGreaterThan(0);
+  });
+
+  it('after acceptance the customer can only request a cancellation; the workspace approves or declines it', async () => {
+    const order = (await place('orders-e2e-card-cancel', [{ listingId: SEED.listingSimple, quantity: 2 }])).data.placeOrder.orders[0];
+    const stockBefore = await variantStock(SEED.variantSimpleDefault);
+    await mutate(SEED.owner, 'acceptOrder', 'AcceptOrderInput', { orderId: order.id });
+    const requested = (await mutate(SEED.customer, 'cancelMyOrder', 'OrderReasonInput', { orderId: order.id, reason: 'Ordered by mistake' }, 'orderStatus cancelRequestStatus')).cancelMyOrder;
+    expect(requested).toEqual({ orderStatus: 'ACCEPTED', cancelRequestStatus: 'REQUESTED' });
+    expect(await queueIds('CANCELLED')).toContain(order.id);
+    expect(await queueIds('CANCEL_REQUESTS')).toContain(order.id);
+    expect(await queueIds('UPCOMING')).not.toContain(order.id);
+
+    await mutate(SEED.owner, 'declineOrderCancellation', 'OrderReasonInput', { orderId: order.id, reason: 'Already packed and on schedule' });
+    expect((await gql(SEED.owner, CARD, { id: order.id })).orqspaceOrder.cancelRequestStatus).toBe('DECLINED');
+    expect(await queueIds('UPCOMING')).toContain(order.id);
+    expect(await queueIds('CANCEL_REQUESTS')).not.toContain(order.id);
+
+    await mutate(SEED.customer, 'cancelMyOrder', 'OrderReasonInput', { orderId: order.id, reason: 'Really need to cancel' });
+    const approved = (await mutate(SEED.owner, 'approveOrderCancellation', 'OrderActionInput', { orderId: order.id }, 'orderStatus cancelRequestStatus cancellationReason')).approveOrderCancellation;
+    expect(approved).toEqual({ orderStatus: 'CANCELLED', cancelRequestStatus: 'APPROVED', cancellationReason: 'Customer request: Really need to cancel' });
+    expect(await variantStock(SEED.variantSimpleDefault)).toBe(stockBefore + 2);
+  });
+
+  it('returns: schedule the pickup, confirm it, then approve the refund (Support tab)', async () => {
+    const order = (await place('orders-e2e-card-return', [{ listingId: SEED.listingSimple, quantity: 1 }])).data.placeOrder.orders[0];
+    await advanceToReady(order.id);
+    await gql(SEED.owner, `mutation($id: ID!) { markOrderAwaitingPickup(input: { orderId: $id }) { orderStatus } }`, { id: order.id });
+    await mutate(SEED.owner, 'recordOrderPayment', 'RecordOrderPaymentInput', { orderId: order.id, kind: 'PAYMENT', method: 'ONLINE', amount: '504.00', providerReference: 'UPI-CARD-3' }, 'paymentStatus');
+    await gql(SEED.owner, `mutation($id: ID!) { confirmCustomerPickup(input: { orderId: $id }) { orderStatus } }`, { id: order.id });
+    expect(await queueIds('COMPLETED')).toContain(order.id);
+
+    await mutate(SEED.customer, 'requestOrderReturn', 'OrderReasonInput', { orderId: order.id, reason: 'Wrong colour' });
+    expect(await queueIds('SUPPORT')).toContain(order.id);
+    expect(await gqlError(SEED.owner, `mutation($i: ScheduleReturnPickupInput!) { scheduleOrderReturnPickup(input: $i) { orderStatus } }`, { i: { orderId: order.id, pickupDate: '2020-01-01' } })).toMatch(
+      /today or a later date/,
+    );
+    const pickupDate = new Date(Date.now() + 86_400_000).toISOString().slice(0, 10);
+    expect((await mutate(SEED.owner, 'scheduleOrderReturnPickup', 'ScheduleReturnPickupInput', { orderId: order.id, pickupDate }, 'returnPickupDate')).scheduleOrderReturnPickup.returnPickupDate).toBe(pickupDate);
+    await mutate(SEED.owner, 'markOrderReturned', 'MarkOrderReturnedInput', { orderId: order.id, reason: 'Picked up from the customer', restock: true });
+    expect(await queueIds('SUPPORT')).toContain(order.id); // refund still due
+    expect((await gql(SEED.owner, `query($id: ID!) { orqspaceOrder(orderId: $id) { amountPaid } }`, { id: order.id })).orqspaceOrder.amountPaid).toBe('504.00');
+    const refunded = (await mutate(SEED.owner, 'approveOrderRefund', 'ApproveRefundInput', { orderId: order.id, providerReference: 'UPI-RF-CARD-3' }, 'orderStatus paymentStatus')).approveOrderRefund;
+    expect(refunded).toEqual({ orderStatus: 'RETURNED', paymentStatus: 'REFUNDED' });
+    expect((await gql(SEED.owner, `query($id: ID!) { orqspaceOrder(orderId: $id) { amountPaid } }`, { id: order.id })).orqspaceOrder.amountPaid).toBe('0.00');
+    expect(await queueIds('SUPPORT')).not.toContain(order.id);
+    expect(await gqlError(SEED.owner, `mutation($i: ApproveRefundInput!) { approveOrderRefund(input: $i) { orderStatus } }`, { i: { orderId: order.id } })).toMatch(/no refund due/);
+  });
+
+  it('returns are only possible within the return window', async () => {
+    const order = (await place('orders-e2e-card-window', [{ listingId: SEED.listingSimple, quantity: 1 }])).data.placeOrder.orders[0];
+    await advanceToReady(order.id);
+    await gql(SEED.owner, `mutation($id: ID!) { markOrderAwaitingPickup(input: { orderId: $id }) { orderStatus } }`, { id: order.id });
+    await gql(SEED.owner, `mutation($id: ID!) { confirmCustomerPickup(input: { orderId: $id }) { orderStatus } }`, { id: order.id });
+    await sqlQuery(`update orders set completed_at = now() - interval '3 days' where id = $1`, [order.id]);
+    expect(await gqlError(SEED.customer, `mutation($i: OrderReasonInput!) { requestOrderReturn(input: $i) { orderStatus } }`, { i: { orderId: order.id, reason: 'Late' } })).toMatch(
+      /within 48 hours of delivery/,
+    );
+  });
+
+  it('scheduled orders must be at least 30 minutes ahead and sort by their time in Upcoming', async () => {
+    const soon = new Date(Date.now() + 10 * 60_000).toISOString();
+    const bad = await place('orders-e2e-card-sched-bad', [{ listingId: SEED.listingSimple, quantity: 1 }], { scheduledFor: soon });
+    expect(bad.errors?.[0].message).toMatch(/at least 30 minutes/);
+    const later = new Date(Date.now() + 26 * 3_600_000);
+    const o = (await place('orders-e2e-card-sched', [{ listingId: SEED.listingSimple, quantity: 1 }], { scheduledFor: later.toISOString() })).data.placeOrder.orders[0];
+    expect(new Date((await gql(SEED.owner, CARD, { id: o.id })).orqspaceOrder.scheduledFor).getTime()).toBe(later.getTime());
+    const upcoming = await queueIds('UPCOMING');
+    expect(upcoming.indexOf(o.id)).toBe(upcoming.length - 1);
+  });
+
+  it('the workspace uploads an invoice that only the customer and the workspace can open', async () => {
+    const order = (await place('orders-e2e-card-invoice', [{ listingId: SEED.listingSimple, quantity: 1 }])).data.placeOrder.orders[0];
+    const fileId = await uploadFile(SEED.owner, 'ORDER_INVOICE');
+    expect(await gqlError(SEED.agentRavi, `mutation { attachOrderInvoice(orderId: "${order.id}", fileId: "${fileId}") { id } }`)).toMatch(/do not manage/);
+    await gql(SEED.owner, `mutation { attachOrderInvoice(orderId: "${order.id}", fileId: "${fileId}") { id } }`);
+    expect((await gql(SEED.owner, CARD, { id: order.id })).orqspaceOrder.invoice).toEqual({ id: fileId, mimeType: 'image/jpeg' });
+    expect((await downloadFile(SEED.customer, fileId)).status).toBe(200);
+    expect((await downloadFile(SEED.owner, fileId)).status).toBe(200);
+    expect((await downloadFile(SEED.agentRavi, fileId)).status).toBe(403);
   });
 });
